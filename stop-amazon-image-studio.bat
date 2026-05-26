@@ -6,6 +6,7 @@ set "PID_FILE=%PROJECT_DIR%\.amazon-image-studio-dev.pid"
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$project = (Resolve-Path -LiteralPath '%PROJECT_DIR%').Path;" ^
+  "$appName = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('5Lqa6ams6YCK5Zu+54mH5bel5L2c5a6k'));" ^
   "$pidFile = '%PID_FILE%';" ^
   "$stopped = $false;" ^
   "if (Test-Path -LiteralPath $pidFile) {" ^
@@ -33,6 +34,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "    Write-Host ('Port 5173 is used by another process, skipped PID ' + $owner);" ^
   "  }" ^
   "}" ^
-  "if ($stopped) { Write-Host 'Amazon Image Studio dev server stopped.' } else { Write-Host 'No Amazon Image Studio dev server was found.' }"
+  "if ($stopped) { Write-Host ($appName + ' dev server stopped.') } else { Write-Host ('No ' + $appName + ' dev server was found.') }"
 
 endlocal
