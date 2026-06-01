@@ -262,11 +262,23 @@ describe('mask draft lifecycle in store actions', () => {
   })
 
   it('shows a submitted toast after creating a gallery task', async () => {
-    await submitTask()
+    const submitted = await submitTask()
 
     const state = useStore.getState()
+    expect(submitted).toBe(true)
     expect(state.tasks).toHaveLength(1)
     expect(state.showToast).toHaveBeenCalledWith('任务已提交', 'success')
+  })
+
+  it('returns false when submit is blocked before creating a task', async () => {
+    useStore.setState({ prompt: '' })
+
+    const submitted = await submitTask()
+
+    const state = useStore.getState()
+    expect(submitted).toBe(false)
+    expect(state.tasks).toHaveLength(0)
+    expect(state.showToast).toHaveBeenCalledWith('请输入提示词', 'error')
   })
 
   it('stores pending Amazon Listing category when the submitted prompt still matches', async () => {

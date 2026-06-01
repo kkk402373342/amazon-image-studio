@@ -37,6 +37,7 @@ import { ChevronLeftIcon, ChevronRightIcon, CloseIcon, CopyIcon, EyeIcon, Histor
 const FIELD_CLASS = 'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none transition placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-100 dark:placeholder:text-gray-500'
 const LABEL_CLASS = 'mb-1.5 block text-xs font-medium text-gray-500 dark:text-gray-400'
 const PLAN_LIST_CLASS = 'grid max-h-[420px] gap-2 overflow-y-auto overscroll-contain pr-1 custom-scrollbar sm:max-h-[480px]'
+const GUIDE_HINT_CLASS = 'mb-3 rounded-lg border border-blue-200 bg-white/85 px-3 py-2 text-xs font-medium leading-relaxed text-blue-800 shadow-sm dark:border-blue-400/25 dark:bg-blue-400/10 dark:text-blue-100'
 const API_MAX_IMAGES = 16
 const STYLE_PREVIEW_WIDTH = 420
 const STYLE_PREVIEW_HEIGHT = 500
@@ -47,6 +48,14 @@ const STYLE_DENSITY_OPTIONS: Array<{ value: AmazonStyleDensityMode; label: strin
 ]
 type ComplianceStatus = 'ready' | 'warning' | 'missing'
 type WorkflowStepStatus = 'done' | 'current' | 'todo'
+type PlannerGuideTarget = 'planner-api' | 'planner-input' | 'planner-action' | 'style' | 'style-choice' | 'plan-list' | 'action-bar'
+type PlannerGuideState = {
+  target: PlannerGuideTarget
+  message: string
+}
+type GuidePanelTone = 'white' | 'muted'
+type PlannerActionProgress = 'filled' | 'submitted'
+type PlannerActionProgressMap = Record<string, PlannerActionProgress>
 type StyleImageState = {
   candidateIndex: number
   status: 'running' | 'done' | 'error'
@@ -121,16 +130,25 @@ function sortPlannerSessions(sessions: AmazonPlannerSession[]) {
   return [...sessions].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, PLANNER_HISTORY_LIMIT)
 }
 
-function getWorkflowStepClass(status: WorkflowStepStatus) {
+function getActionStepClass(status: WorkflowStepStatus) {
   if (status === 'done') return 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-200'
-  if (status === 'current') return 'border-blue-200 bg-blue-50 text-blue-800 ring-2 ring-blue-500/10 dark:border-blue-400/30 dark:bg-blue-400/10 dark:text-blue-200'
+  if (status === 'current') return 'border-blue-200 bg-blue-50 text-blue-800 ring-1 ring-blue-500/10 dark:border-blue-400/30 dark:bg-blue-400/10 dark:text-blue-200'
   return 'border-gray-200 bg-white text-gray-500 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-400'
 }
 
-function getWorkflowIndexClass(status: WorkflowStepStatus) {
-  if (status === 'done') return 'bg-emerald-600 text-white dark:bg-emerald-400 dark:text-gray-950'
-  if (status === 'current') return 'bg-blue-600 text-white'
-  return 'bg-gray-100 text-gray-500 dark:bg-white/[0.08] dark:text-gray-300'
+function getGuidePanelClass(isActive: boolean, tone: GuidePanelTone = 'white') {
+  if (isActive) return 'border-blue-300 bg-blue-50/60 ring-2 ring-blue-500/15 dark:border-blue-400/60 dark:bg-blue-500/10'
+  if (tone === 'muted') return 'border-gray-200 bg-gray-50 dark:border-white/[0.08] dark:bg-gray-950'
+  return 'border-gray-200 bg-white dark:border-white/[0.08] dark:bg-gray-950'
+}
+
+function getGuideFocusClass(isActive: boolean) {
+  return isActive ? 'ring-2 ring-blue-500/20 dark:ring-blue-400/20' : ''
+}
+
+function getPlannerActionKey(mode: AmazonPlannerMode, planIndex: number | null, slot: string | undefined | null) {
+  if (planIndex == null || !slot) return ''
+  return `${mode}:${planIndex}:${slot}`
 }
 
 function getPlannerFailureDetail(err: unknown): string {
@@ -304,6 +322,7 @@ export default function AmazonPlanner() {
   const [showPlannerHistory, setShowPlannerHistory] = useState(false)
   const [isPlanning, setIsPlanning] = useState(false)
   const [plannerError, setPlannerError] = useState('')
+  const [actionProgress, setActionProgress] = useState<PlannerActionProgressMap>({})
   const resolutionTier = resolution === '4k' ? '4K' : '2K'
   const aPlusSpecs = useMemo(() => getAPlusModuleSpecs(aPlusType), [aPlusType])
   const aPlusPlansWithSizes = useMemo(() => withAPlusGenerationSizes(aPlusPlans, resolutionTier), [aPlusPlans, resolutionTier])
@@ -350,6 +369,8 @@ export default function AmazonPlanner() {
   const showStickyActions = plannerMode === 'aplus' ? aPlusPlansWithSizes.length > 0 : imagePlans.length > 0
   const actionDisabled = plannerMode === 'aplus' ? !selectedAPlusPlan : !activePrompt.trim()
   const submitDisabled = actionDisabled || (styleReferenceRequired && !hasStyleReference) || styleReferenceLimitExceeded
+  const hasPlanOptions = visiblePlanCount > 0
+  const hasSelectedPlan = plannerMode === 'aplus' ? Boolean(selectedAPlusPlan) : Boolean(selectedPlan)
   const canGoPrev = visiblePlanCount > 0 && visiblePlanIndex != null && visiblePlanIndex > 0
   const canGoNext = visiblePlanCount > 0 && visiblePlanIndex != null && visiblePlanIndex < visiblePlanCount - 1
   const actionPositionLabel = visiblePlanCount > 0 && visiblePlanIndex != null
@@ -357,47 +378,92 @@ export default function AmazonPlanner() {
     : plannerMode === 'aplus'
       ? `${aPlusSpecs.length} 个待策划模块`
       : '未选择'
+  const currentActionKey = getPlannerActionKey(plannerMode, visiblePlanIndex, actionSlot)
+  const currentActionProgress = currentActionKey ? actionProgress[currentActionKey] ?? null : null
+  const currentActionFilled = currentActionProgress === 'filled' || currentActionProgress === 'submitted'
+  const currentActionSubmitted = currentActionProgress === 'submitted'
+  const actionKindLabel = plannerMode === 'aplus' ? '模块' : isMainListingPlan ? '主图' : '图片'
+  const actionGuidance = !hasSelectedPlan
+    ? plannerMode === 'aplus' ? '先选择一个 A+ 模块' : '先选择一个图片位'
+    : currentActionSubmitted
+      ? `已提交 ${actionSlot ?? '当前'} ${actionKindLabel}，${canGoNext ? '点击下一张继续' : '已是最后一张'}`
+      : currentActionFilled
+        ? '已填入右侧输入框，下一步提交生成'
+        : `先填入当前 ${actionSlot ?? '当前'} ${actionKindLabel}提示词`
+  const mainStyleGuidance = isMainListingPlan
+    ? hasStyleReference
+      ? 'MAIN 主图不附加风格板；附图和 A+ 会使用已选风格。'
+      : 'MAIN 主图不附加风格板；附图和 A+ 可先生成并选择风格板。'
+    : ''
+  const actionProgressSteps = [
+    {
+      label: '1 填入',
+      detail: currentActionFilled ? '已填入' : '待填入',
+      status: currentActionFilled ? 'done' : 'current',
+    },
+    {
+      label: '2 提交生成',
+      detail: currentActionSubmitted ? '已提交' : currentActionFilled ? '下一步' : '待提交',
+      status: currentActionSubmitted ? 'done' : currentActionFilled ? 'current' : 'todo',
+    },
+    {
+      label: '3 下一张',
+      detail: currentActionSubmitted ? (canGoNext ? '继续下一张' : '最后一张') : '提交后继续',
+      status: currentActionSubmitted ? (canGoNext ? 'current' : 'done') : 'todo',
+    },
+  ] satisfies Array<{ label: string; detail: string; status: WorkflowStepStatus }>
+  const hasListingText = Boolean(listingText.trim())
+  const hasUsablePlannerProfile = Boolean(plannerProfile && !plannerProfileValidation)
+  const hasGeneratedStyleImages = styleImages.some((image) => image.status === 'done')
+  const hasRunningStyleImages = styleImages.some((image) => image.status === 'running')
+  const seriesStyleReferenceNeeded = plannerMode === 'aplus'
+    ? hasPlanOptions
+    : imagePlans.some((plan) => !isAmazonListingMainSlot(plan.slot))
+  const guideState: PlannerGuideState = !hasUsablePlannerProfile
+    ? {
+        target: 'planner-api',
+        message: plannerProfileValidation ? `下一步：先配置 AI 策划 API（${plannerProfileValidation}）` : '下一步：先配置 AI 策划 API',
+      }
+    : !hasListingText
+      ? {
+          target: 'planner-input',
+          message: plannerMode === 'aplus' ? '下一步：粘贴标题、五点描述或品牌说明' : '下一步：粘贴标题和五点描述',
+        }
+      : !hasPlanOptions
+        ? {
+            target: 'planner-action',
+            message: plannerMode === 'aplus' ? '下一步：点击 AI策划A+ 生成模块方案' : '下一步：点击 AI策划生成逐张方案',
+          }
+        : seriesStyleReferenceNeeded && !hasStyleReference
+          ? {
+              target: hasGeneratedStyleImages ? 'style-choice' : 'style',
+              message: hasGeneratedStyleImages
+                ? '下一步：选择一张风格板作为附图和 A+ 的隐藏参考'
+                : hasRunningStyleImages
+                  ? '正在生成风格板，完成后选择一张作为隐藏参考'
+                  : '下一步：生成 3 张低清风格板，统一附图和 A+ 视觉',
+            }
+          : !hasSelectedPlan
+            ? {
+                target: 'plan-list',
+                message: plannerMode === 'aplus' ? '下一步：选择要生成的 A+ 模块' : '下一步：选择要生成的图片位',
+              }
+            : {
+                target: 'action-bar',
+                message: currentActionSubmitted
+                  ? canGoNext ? '下一步：点击下一张继续处理' : '当前图片已提交，已是最后一张'
+                  : currentActionFilled
+                    ? '下一步：提交生成当前图片'
+                    : `下一步：填入当前 ${actionSlot ?? '当前'} ${actionKindLabel}提示词`,
+              }
+  const plannerGuideActive = guideState.target === 'planner-api' || guideState.target === 'planner-input' || guideState.target === 'planner-action'
+  const styleGuideActive = guideState.target === 'style' || guideState.target === 'style-choice'
+  const planListGuideActive = guideState.target === 'plan-list'
+  const actionBarGuideActive = guideState.target === 'action-bar'
   const checks = plannerMode === 'aplus'
     ? getAmazonAPlusComplianceChecks(draft, selectedAPlusPlan, aPlusType, inputImages.length, hasStyleReference)
     : getAmazonListingPlannerChecks(draft, targetSize, inputImages.length, hasStyleReference, styleReferenceRequired)
   const atImageLimit = inputImages.length >= API_MAX_IMAGES
-  const hasPlanningInput = Boolean(listingText.trim() || draft.productTitle.trim() || draft.sellingPoints.trim() || inputImages.length > 0)
-  const hasPlanOptions = visiblePlanCount > 0
-  const hasSelectedPlan = plannerMode === 'aplus' ? Boolean(selectedAPlusPlan) : Boolean(selectedPlan)
-  const activeWorkflowStep = !hasPlanningInput ? 0 : !hasPlanOptions ? 1 : styleReferenceRequired && !hasStyleReference ? 2 : !hasSelectedPlan ? 3 : 4
-  const workflowSteps = [
-    {
-      label: '准备资料',
-      detail: hasPlanningInput ? '资料已就绪' : plannerMode === 'aplus' ? '标题、五点或品牌说明' : '标题和五点描述',
-    },
-    {
-      label: plannerMode === 'aplus' ? 'AI策划A+' : 'AI策划',
-      detail: hasPlanOptions
-        ? plannerMode === 'aplus' ? `${visiblePlanCount} 个模块` : `${visiblePlanCount} 张方案`
-        : plannerProfileValidation ? '先完成策划配置' : '生成逐张方案',
-    },
-    {
-      label: '选择风格',
-      detail: !styleReferenceRequired
-        ? 'MAIN 主图跳过风格板'
-        : hasStyleReference
-          ? `${selectedStyleCandidate?.label ?? '已选择'} · 隐藏参考`
-          : styleImages.some((image) => image.status === 'done')
-            ? '请选择一张风格板'
-            : '生成 3 张低清风格板',
-    },
-    {
-      label: plannerMode === 'aplus' ? '选择模块' : '选择图片位',
-      detail: hasSelectedPlan ? `${actionSlot ?? '当前'} 已选` : hasPlanOptions ? '点选右侧卡片' : '等待策划结果',
-    },
-    {
-      label: '填入生成',
-      detail: hasSelectedPlan ? `${targetSize} / ${generationParamLabel}` : '等待可用 Prompt',
-    },
-  ].map((step, index) => ({
-    ...step,
-    status: index < activeWorkflowStep ? 'done' : index === activeWorkflowStep ? 'current' : 'todo',
-  })) satisfies Array<{ label: string; detail: string; status: WorkflowStepStatus }>
 
   useEffect(() => {
     let cancelled = false
@@ -470,6 +536,14 @@ export default function AmazonPlanner() {
     })
   }
 
+  const markActionProgress = (key: string, progress: PlannerActionProgress) => {
+    if (!key) return
+    setActionProgress((current) => ({
+      ...current,
+      [key]: progress,
+    }))
+  }
+
   const applyPrompt = (options: { requireStyle?: boolean } = {}) => {
     if (plannerMode === 'aplus' && !selectedAPlusPlan) {
       showToast('请先 AI 策划并选择一个 A+ 模块', 'error')
@@ -508,14 +582,18 @@ export default function AmazonPlanner() {
       output_compression: DEFAULT_PARAMS.output_compression,
       n: 1,
     })
+    markActionProgress(currentActionKey, 'filled')
     showToast(plannerMode === 'aplus' ? '已填入 A+ 图片提示词' : '已填入亚马逊图片提示词', 'success')
     return true
   }
 
   const applyAndSubmit = () => {
     if (!applyPrompt({ requireStyle: true })) return
+    const submittedActionKey = currentActionKey
     queueMicrotask(() => {
-      void submitTask()
+      void submitTask().then((submitted) => {
+        if (submitted) markActionProgress(submittedActionKey, 'submitted')
+      })
     })
   }
 
@@ -674,6 +752,7 @@ export default function AmazonPlanner() {
     setStylePreview(null)
     setStyleError('')
     setPlannerError('')
+    setActionProgress({})
     void savePlannerSession({
       id: createPlannerSessionId(),
       mode: result.mode,
@@ -824,6 +903,7 @@ export default function AmazonPlanner() {
     setSelectedStyleIndex(null)
     setStylePreview(null)
     setStyleError('')
+    setActionProgress({})
   }
 
   const changeAPlusType = (nextType: APlusContentType) => {
@@ -837,6 +917,7 @@ export default function AmazonPlanner() {
       setSelectedStyleIndex(null)
       setStylePreview(null)
       setStyleError('')
+      setActionProgress({})
     }
   }
 
@@ -855,6 +936,7 @@ export default function AmazonPlanner() {
     setSelectedAPlusPlanIndex(null)
     setPlannerError('')
     setCurrentPlannerSessionId(null)
+    setActionProgress({})
   }
 
   const restorePlannerSession = async (session: AmazonPlannerSession) => {
@@ -902,6 +984,7 @@ export default function AmazonPlanner() {
       : '')
     setCurrentPlannerSessionId(session.id)
     setShowPlannerHistory(false)
+    setActionProgress({})
     showToast('策划历史已恢复', 'success')
   }
 
@@ -1027,47 +1110,7 @@ export default function AmazonPlanner() {
                 </span>
               )}
             </button>
-            <button
-              type="button"
-              onClick={copyPrompt}
-              className="inline-flex h-10 items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-200 dark:hover:bg-white/[0.06]"
-            >
-              <CopyIcon className="h-4 w-4" />
-              复制
-            </button>
-            <button
-              type="button"
-              onClick={() => applyPrompt()}
-              className="inline-flex h-10 items-center gap-2 rounded-xl bg-gray-900 px-4 text-sm font-semibold text-white transition hover:bg-gray-700 dark:bg-white dark:text-gray-950 dark:hover:bg-gray-200"
-            >
-              <PhotoIcon className="h-4 w-4" />
-              填入
-            </button>
-            <button
-              type="button"
-              onClick={applyAndSubmit}
-              className="inline-flex h-10 items-center rounded-xl bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-500"
-            >
-              提交生成
-            </button>
           </div>
-        </div>
-        <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4" aria-label="Amazon 图片生成流程">
-          {workflowSteps.map((step, index) => (
-            <div
-              key={step.label}
-              aria-current={step.status === 'current' ? 'step' : undefined}
-              className={`min-h-[68px] rounded-lg border px-3 py-2.5 transition ${getWorkflowStepClass(step.status)}`}
-            >
-              <div className="flex items-center gap-2">
-                <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${getWorkflowIndexClass(step.status)}`}>
-                  {index + 1}
-                </span>
-                <span className="min-w-0 text-sm font-semibold">{step.label}</span>
-              </div>
-              <div className="mt-1.5 text-xs leading-snug opacity-80">{step.detail}</div>
-            </div>
-          ))}
         </div>
         {showPlannerHistory && (
           <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-white/[0.08] dark:bg-gray-950">
@@ -1142,7 +1185,7 @@ export default function AmazonPlanner() {
 
       <div className="grid gap-0 lg:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
         <div className="border-b border-gray-200 p-4 dark:border-white/[0.08] sm:p-5 lg:border-b-0 lg:border-r">
-          <div className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm dark:border-white/[0.08] dark:bg-gray-950">
+          <div className={`rounded-xl border p-3 shadow-sm transition ${getGuidePanelClass(plannerGuideActive)}`}>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">
@@ -1158,6 +1201,11 @@ export default function AmazonPlanner() {
                 双配置
               </div>
             </div>
+            {plannerGuideActive && (
+              <div className={`${GUIDE_HINT_CLASS} mt-3`}>
+                {guideState.message}
+              </div>
+            )}
             {plannerMode === 'aplus' && (
               <div className="mt-3 inline-flex rounded-xl border border-gray-200 bg-gray-100 p-1 dark:border-white/[0.08] dark:bg-white/[0.04]">
                 {([
@@ -1176,7 +1224,7 @@ export default function AmazonPlanner() {
                 ))}
               </div>
             )}
-            <label className="mt-3 block">
+            <label className={`mt-3 block rounded-xl transition ${getGuideFocusClass(guideState.target === 'planner-input')}`}>
               <span className={LABEL_CLASS}>{plannerMode === 'aplus' ? '标题 / 五点描述 / 品牌说明' : '标题 / 五点描述'}</span>
               <textarea
                 value={listingText}
@@ -1188,19 +1236,19 @@ export default function AmazonPlanner() {
               />
             </label>
             <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-              <div className={`rounded-xl border px-3 py-2 ${plannerProfile && !plannerProfileValidation ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-200' : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-200'}`}>
+              <div className={`rounded-xl border px-3 py-2 transition ${guideState.target === 'planner-api' ? 'border-blue-300 bg-blue-50 text-blue-800 ring-2 ring-blue-500/15 dark:border-blue-400/60 dark:bg-blue-500/10 dark:text-blue-100' : plannerProfile && !plannerProfileValidation ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-200' : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-200'}`}>
                 <div className="text-xs font-semibold">AI 策划配置</div>
                 <div className="mt-1 text-xs leading-relaxed">
                   {plannerProfile ? `${plannerProfile.name} · ${plannerProfile.model} · ${plannerApiLabel}` : '未配置，请在设置中选择一个 Chat Completions 策划配置'}
                   {plannerProfileValidation ? `（${plannerProfileValidation}）` : ''}
                 </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+              <div className={`flex flex-wrap items-center gap-2 rounded-xl transition sm:justify-end ${getGuideFocusClass(guideState.target === 'planner-action')}`}>
                 <button
                   type="button"
                   onClick={createAiPlan}
                   disabled={isPlanning || Boolean(plannerProfileValidation)}
-                  className={`inline-flex h-10 items-center rounded-xl px-4 text-sm font-semibold text-white transition ${isPlanning ? 'cursor-wait bg-gray-400' : plannerProfileValidation ? 'cursor-not-allowed bg-gray-300 dark:bg-white/[0.12]' : 'bg-blue-600 hover:bg-blue-500'}`}
+                  className={`inline-flex h-10 items-center rounded-xl px-4 text-sm font-semibold text-white transition ${isPlanning ? 'cursor-wait bg-gray-400' : plannerProfileValidation ? 'cursor-not-allowed bg-gray-300 dark:bg-white/[0.12]' : 'bg-blue-600 hover:bg-blue-500'} ${guideState.target === 'planner-action' ? 'ring-2 ring-blue-500/25 ring-offset-2 ring-offset-white dark:ring-offset-gray-950' : ''}`}
                 >
                   {isPlanning ? '策划中...' : plannerMode === 'aplus' ? 'AI策划A+' : 'AI策划'}
                 </button>
@@ -1443,81 +1491,114 @@ export default function AmazonPlanner() {
         <div className="p-4 sm:p-5">
           {showStickyActions && (
             <>
-              <div data-amazon-action-bar className="fixed left-3 right-3 top-[7.25rem] z-30 rounded-xl border border-gray-200 bg-white/95 p-3 shadow-lg shadow-gray-900/5 backdrop-blur dark:border-white/[0.08] dark:bg-gray-950/95 dark:shadow-black/20 sm:sticky sm:left-auto sm:right-auto sm:top-20 sm:mb-4">
-              <div className="flex flex-col gap-3">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0">
+              <div data-amazon-action-bar className={`fixed left-3 right-3 top-[7.25rem] z-30 rounded-xl border p-3 shadow-lg shadow-gray-900/5 backdrop-blur transition dark:shadow-black/20 sm:sticky sm:left-auto sm:right-auto sm:top-20 sm:mb-4 ${getGuidePanelClass(actionBarGuideActive)}`}>
+                <div className="flex flex-col gap-3">
+                  {actionBarGuideActive && (
+                    <div className={GUIDE_HINT_CLASS}>
+                      {guideState.message}
+                    </div>
+                  )}
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-md bg-blue-600 px-2 py-0.5 text-[11px] font-bold text-white">
+                          {actionSlot ?? (plannerMode === 'aplus' ? 'A+' : '当前')}
+                        </span>
+                        <span className="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">
+                          {actionLabel ?? (plannerMode === 'aplus' ? '请选择 A+ 模块' : '当前图片方案')}
+                        </span>
+                        <span className="rounded-md bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-500 dark:bg-white/[0.08] dark:text-gray-300">
+                          {actionPositionLabel}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                        {targetSize} / {generationParamLabel}{plannerMode === 'aplus' && selectedAPlusPlan ? ` · 上传建议 ${selectedAPlusPlan.uploadSize}` : ''}
+                      </div>
+                    </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-md bg-blue-600 px-2 py-0.5 text-[11px] font-bold text-white">
-                        {actionSlot ?? (plannerMode === 'aplus' ? 'A+' : '当前')}
-                      </span>
-                      <span className="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">
-                        {actionLabel ?? (plannerMode === 'aplus' ? '请选择 A+ 模块' : '当前图片方案')}
-                      </span>
-                      <span className="rounded-md bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-500 dark:bg-white/[0.08] dark:text-gray-300">
-                        {actionPositionLabel}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
-                      {targetSize} / {generationParamLabel}{plannerMode === 'aplus' && selectedAPlusPlan ? ` · 上传建议 ${selectedAPlusPlan.uploadSize}` : ''}
+                      <button
+                        type="button"
+                        onClick={() => stepVisiblePlan(-1)}
+                        disabled={!canGoPrev}
+                        className={`inline-flex h-9 items-center gap-1 rounded-lg border px-2.5 text-xs font-medium transition ${canGoPrev ? 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-white/[0.06]' : 'cursor-not-allowed border-gray-100 bg-gray-100 text-gray-300 dark:border-white/[0.04] dark:bg-white/[0.04] dark:text-gray-600'}`}
+                      >
+                        <ChevronLeftIcon className="h-3.5 w-3.5" />
+                        上一张
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => stepVisiblePlan(1)}
+                        disabled={!canGoNext}
+                        className={`inline-flex h-9 items-center gap-1 rounded-lg border px-2.5 text-xs font-medium transition ${currentActionSubmitted && canGoNext ? 'border-blue-600 bg-blue-600 text-white shadow-sm hover:bg-blue-500' : canGoNext ? 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-white/[0.06]' : 'cursor-not-allowed border-gray-100 bg-gray-100 text-gray-300 dark:border-white/[0.04] dark:bg-white/[0.04] dark:text-gray-600'}`}
+                      >
+                        下一张
+                        <ChevronRightIcon className="h-3.5 w-3.5" />
+                      </button>
                     </div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
+
+                  <div className={`rounded-lg border px-3 py-2 text-xs font-medium ${currentActionSubmitted ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-200' : currentActionFilled ? 'border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-200' : 'border-gray-200 bg-gray-50 text-gray-700 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200'}`}>
+                    {actionGuidance}
+                    {mainStyleGuidance && (
+                      <span className="mt-1 block text-[11px] font-normal opacity-80">{mainStyleGuidance}</span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    {actionProgressSteps.map((step) => (
+                      <div key={step.label} className={`rounded-lg border px-2 py-1.5 ${getActionStepClass(step.status)}`}>
+                        <div className="truncate text-[10px] font-bold">{step.label}</div>
+                        <div className="mt-0.5 truncate text-[10px] opacity-80">{step.detail}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
                     <button
                       type="button"
-                      onClick={() => stepVisiblePlan(-1)}
-                      disabled={!canGoPrev}
-                      className={`inline-flex h-9 items-center gap-1 rounded-lg border px-2.5 text-xs font-medium transition ${canGoPrev ? 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-white/[0.06]' : 'cursor-not-allowed border-gray-100 bg-gray-100 text-gray-300 dark:border-white/[0.04] dark:bg-white/[0.04] dark:text-gray-600'}`}
+                      onClick={copyPrompt}
+                      disabled={actionDisabled}
+                      className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border px-2 text-xs font-medium transition ${actionDisabled ? 'cursor-not-allowed border-gray-100 bg-gray-100 text-gray-300 dark:border-white/[0.04] dark:bg-white/[0.04] dark:text-gray-600' : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-white/[0.06]'}`}
                     >
-                      <ChevronLeftIcon className="h-3.5 w-3.5" />
-                      上一张
+                      <CopyIcon className="h-3.5 w-3.5" />
+                      复制
                     </button>
                     <button
                       type="button"
-                      onClick={() => stepVisiblePlan(1)}
-                      disabled={!canGoNext}
-                      className={`inline-flex h-9 items-center gap-1 rounded-lg border px-2.5 text-xs font-medium transition ${canGoNext ? 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-white/[0.06]' : 'cursor-not-allowed border-gray-100 bg-gray-100 text-gray-300 dark:border-white/[0.04] dark:bg-white/[0.04] dark:text-gray-600'}`}
+                      onClick={() => applyPrompt()}
+                      disabled={actionDisabled}
+                      className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-semibold transition ${actionDisabled ? 'cursor-not-allowed bg-gray-200 text-gray-400 dark:bg-white/[0.06] dark:text-gray-600' : currentActionFilled ? 'bg-emerald-600 text-white hover:bg-emerald-500' : 'bg-gray-900 text-white hover:bg-gray-700 dark:bg-white dark:text-gray-950 dark:hover:bg-gray-200'}`}
                     >
-                      下一张
-                      <ChevronRightIcon className="h-3.5 w-3.5" />
+                      {currentActionFilled ? (
+                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                        </svg>
+                      ) : (
+                        <PhotoIcon className="h-3.5 w-3.5" />
+                      )}
+                      {currentActionFilled ? '已填入' : '填入'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={applyAndSubmit}
+                      disabled={submitDisabled || currentActionSubmitted}
+                      className={`inline-flex h-9 items-center justify-center rounded-lg px-2 text-xs font-semibold transition ${currentActionSubmitted ? 'cursor-default bg-emerald-600 text-white' : submitDisabled ? 'cursor-not-allowed bg-gray-200 text-gray-400 dark:bg-white/[0.06] dark:text-gray-600' : 'bg-blue-600 text-white hover:bg-blue-500'}`}
+                    >
+                      {currentActionSubmitted ? '已提交' : '提交生成'}
                     </button>
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <button
-                    type="button"
-                    onClick={copyPrompt}
-                    disabled={actionDisabled}
-                    className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border px-2 text-xs font-medium transition ${actionDisabled ? 'cursor-not-allowed border-gray-100 bg-gray-100 text-gray-300 dark:border-white/[0.04] dark:bg-white/[0.04] dark:text-gray-600' : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-white/[0.06]'}`}
-                  >
-                    <CopyIcon className="h-3.5 w-3.5" />
-                    复制
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => applyPrompt()}
-                    disabled={actionDisabled}
-                    className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-semibold transition ${actionDisabled ? 'cursor-not-allowed bg-gray-200 text-gray-400 dark:bg-white/[0.06] dark:text-gray-600' : 'bg-gray-900 text-white hover:bg-gray-700 dark:bg-white dark:text-gray-950 dark:hover:bg-gray-200'}`}
-                  >
-                    <PhotoIcon className="h-3.5 w-3.5" />
-                    填入
-                  </button>
-                  <button
-                    type="button"
-                    onClick={applyAndSubmit}
-                    disabled={submitDisabled}
-                    className={`inline-flex h-9 items-center justify-center rounded-lg px-2 text-xs font-semibold transition ${submitDisabled ? 'cursor-not-allowed bg-gray-200 text-gray-400 dark:bg-white/[0.06] dark:text-gray-600' : 'bg-blue-600 text-white hover:bg-blue-500'}`}
-                  >
-                    提交生成
-                  </button>
-                </div>
               </div>
-              </div>
-              <div className="h-[148px] sm:hidden" aria-hidden="true" />
+              <div className="h-[218px] sm:hidden" aria-hidden="true" />
             </>
           )}
           {hasPlanOptions && (
-            <div className="mb-4 rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-white/[0.08] dark:bg-gray-950">
+            <div className={`mb-4 rounded-xl border p-3 transition ${getGuidePanelClass(styleGuideActive, 'muted')}`}>
+              {styleGuideActive && (
+                <div className={GUIDE_HINT_CLASS}>
+                  {guideState.message}
+                </div>
+              )}
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">视觉风格选择</div>
@@ -1542,7 +1623,7 @@ export default function AmazonPlanner() {
                     type="button"
                     onClick={generateStyleImages}
                     disabled={isGeneratingStyleImages || styleCandidates.length === 0}
-                    className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-semibold transition ${isGeneratingStyleImages || styleCandidates.length === 0 ? 'cursor-not-allowed bg-gray-200 text-gray-400 dark:bg-white/[0.06] dark:text-gray-600' : 'bg-gray-900 text-white hover:bg-gray-700 dark:bg-white dark:text-gray-950 dark:hover:bg-gray-200'}`}
+                    className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-semibold transition ${isGeneratingStyleImages || styleCandidates.length === 0 ? 'cursor-not-allowed bg-gray-200 text-gray-400 dark:bg-white/[0.06] dark:text-gray-600' : 'bg-gray-900 text-white hover:bg-gray-700 dark:bg-white dark:text-gray-950 dark:hover:bg-gray-200'} ${guideState.target === 'style' ? 'ring-2 ring-blue-500/25 ring-offset-2 ring-offset-blue-50 dark:ring-offset-gray-950' : ''}`}
                   >
                     <PhotoIcon className="h-4 w-4" />
                     {isGeneratingStyleImages ? '生成中...' : '生成风格板'}
@@ -1555,7 +1636,7 @@ export default function AmazonPlanner() {
                 </div>
               )}
               {styleCandidates.length > 0 && (
-                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                <div className={`mt-3 grid gap-2 rounded-xl transition sm:grid-cols-3 ${getGuideFocusClass(guideState.target === 'style-choice')}`}>
                   {styleCandidates.map((candidate, index) => {
                     const imageState = styleImages.find((image) => image.candidateIndex === index)
                     const isSelected = selectedStyleIndex === index && imageState?.status === 'done'
@@ -1639,7 +1720,12 @@ export default function AmazonPlanner() {
             </div>
           )}
           {plannerMode === 'listing' && imagePlans.length > 0 && (
-            <div className="mb-4">
+            <div className={`mb-4 rounded-xl border p-3 transition ${getGuidePanelClass(planListGuideActive)}`}>
+              {planListGuideActive && (
+                <div className={GUIDE_HINT_CLASS}>
+                  {guideState.message}
+                </div>
+              )}
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div>
                   <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">逐张策划</div>
@@ -1654,6 +1740,7 @@ export default function AmazonPlanner() {
               <div className={PLAN_LIST_CLASS}>
                 {imagePlans.map((plan, index) => {
                   const isSelected = selectedPlanIndex === index
+                  const planActionProgress = actionProgress[getPlannerActionKey('listing', index, plan.slot)]
                   return (
                     <button
                       key={`${plan.slot}-${index}`}
@@ -1666,6 +1753,14 @@ export default function AmazonPlanner() {
                           {plan.slot}
                         </span>
                         <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">{plan.label}</span>
+                        {isSelected && (
+                          <span className="rounded bg-blue-600 px-1.5 py-0.5 text-[10px] font-bold text-white">当前</span>
+                        )}
+                        {planActionProgress && (
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${planActionProgress === 'submitted' ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-200'}`}>
+                            {planActionProgress === 'submitted' ? '已提交' : '已填入'}
+                          </span>
+                        )}
                       </div>
                       <div className="mt-2 line-clamp-3 text-xs leading-relaxed text-gray-600 dark:text-gray-300">{getPlanSummary(plan.planMarkdown)}</div>
                       <div className="mt-2 line-clamp-2 rounded-lg bg-white/70 px-2 py-1 text-[11px] leading-relaxed text-gray-500 dark:bg-white/[0.05] dark:text-gray-300">
@@ -1678,7 +1773,12 @@ export default function AmazonPlanner() {
             </div>
           )}
           {plannerMode === 'aplus' && aPlusPlansWithSizes.length > 0 && (
-            <div className="mb-4">
+            <div className={`mb-4 rounded-xl border p-3 transition ${getGuidePanelClass(planListGuideActive)}`}>
+              {planListGuideActive && (
+                <div className={GUIDE_HINT_CLASS}>
+                  {guideState.message}
+                </div>
+              )}
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div>
                   <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">A+ 模块编排</div>
@@ -1694,6 +1794,7 @@ export default function AmazonPlanner() {
                 {aPlusPlansWithSizes.map((plan, index) => {
                   const isSelected = selectedAPlusPlanIndex === index
                   const externalText = formatAPlusModuleText(plan)
+                  const planActionProgress = actionProgress[getPlannerActionKey('aplus', index, plan.slot)]
                   return (
                     <button
                       key={`${plan.slot}-${index}`}
@@ -1707,6 +1808,14 @@ export default function AmazonPlanner() {
                         </span>
                         <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">{getAPlusModuleDisplayName(plan)}</span>
                         <span className="text-xs text-gray-400">{getAPlusModuleEnglishName(plan)}</span>
+                        {isSelected && (
+                          <span className="rounded bg-blue-600 px-1.5 py-0.5 text-[10px] font-bold text-white">当前</span>
+                        )}
+                        {planActionProgress && (
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${planActionProgress === 'submitted' ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-200'}`}>
+                            {planActionProgress === 'submitted' ? '已提交' : '已填入'}
+                          </span>
+                        )}
                       </div>
                       <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-gray-500 dark:text-gray-400">
                         <span className="rounded-md bg-white/70 px-2 py-0.5 dark:bg-white/[0.05]">上传 {plan.uploadSize}</span>

@@ -4,6 +4,7 @@ import {
   DEFAULT_FAL_BASE_URL,
   DEFAULT_FAL_MODEL,
   DEFAULT_IMAGES_MODEL,
+  DEFAULT_AMAZON_PLANNER_PROFILE_ID,
   DEFAULT_OPENAI_PROFILE_ID,
   DEFAULT_RESPONSES_MODEL,
   DEFAULT_SETTINGS,
@@ -19,6 +20,90 @@ import {
 } from './apiProfiles'
 
 describe('mergeImportedSettings', () => {
+  it('creates separate default profiles for image generation and AI planning', () => {
+    const settings = normalizeSettings({})
+
+    expect(settings.profiles).toHaveLength(2)
+    expect(settings.activeProfileId).toBe(DEFAULT_OPENAI_PROFILE_ID)
+    expect(settings.amazonPlannerProfileId).toBe(DEFAULT_AMAZON_PLANNER_PROFILE_ID)
+    expect(settings.profiles.find((profile) => profile.id === DEFAULT_OPENAI_PROFILE_ID)).toMatchObject({
+      name: '生图',
+      apiMode: 'images',
+      model: DEFAULT_IMAGES_MODEL,
+    })
+    expect(getAmazonPlannerProfile(settings)).toMatchObject({
+      id: DEFAULT_AMAZON_PLANNER_PROFILE_ID,
+      name: 'AI策划',
+      apiMode: 'responses',
+      model: DEFAULT_RESPONSES_MODEL,
+    })
+  })
+
+  it('splits a persisted single default planner profile into image and planner defaults', () => {
+    const settings = normalizeSettings({
+      profiles: [
+        createDefaultOpenAIProfile({
+          apiKey: 'shared-key',
+          apiMode: 'responses',
+          model: DEFAULT_RESPONSES_MODEL,
+        }),
+      ],
+      activeProfileId: DEFAULT_OPENAI_PROFILE_ID,
+      amazonPlannerProfileId: DEFAULT_OPENAI_PROFILE_ID,
+    })
+
+    expect(settings.profiles).toHaveLength(2)
+    expect(settings.activeProfileId).toBe(DEFAULT_OPENAI_PROFILE_ID)
+    expect(settings.amazonPlannerProfileId).toBe(DEFAULT_AMAZON_PLANNER_PROFILE_ID)
+    expect(settings.profiles.find((profile) => profile.id === DEFAULT_OPENAI_PROFILE_ID)).toMatchObject({
+      name: '生图',
+      apiKey: 'shared-key',
+      apiMode: 'images',
+      model: DEFAULT_IMAGES_MODEL,
+    })
+    expect(getAmazonPlannerProfile(settings)).toMatchObject({
+      id: DEFAULT_AMAZON_PLANNER_PROFILE_ID,
+      name: 'AI策划',
+      apiKey: 'shared-key',
+      apiMode: 'responses',
+      model: DEFAULT_RESPONSES_MODEL,
+    })
+  })
+
+  it('keeps explicit profile API mode and model instead of applying stale top-level fields', () => {
+    const settings = normalizeSettings({
+      baseUrl: 'https://stale.example.com/v1',
+      apiMode: 'responses',
+      model: DEFAULT_RESPONSES_MODEL,
+      profiles: [
+        createDefaultOpenAIProfile({
+          id: DEFAULT_OPENAI_PROFILE_ID,
+          name: '生图',
+          baseUrl: 'https://images.example.com/v1',
+          apiMode: 'images',
+          model: DEFAULT_IMAGES_MODEL,
+        }),
+        createDefaultOpenAIProfile({
+          id: DEFAULT_AMAZON_PLANNER_PROFILE_ID,
+          name: 'AI策划',
+          apiMode: 'responses',
+          model: DEFAULT_RESPONSES_MODEL,
+        }),
+      ],
+      activeProfileId: DEFAULT_OPENAI_PROFILE_ID,
+      amazonPlannerProfileId: DEFAULT_AMAZON_PLANNER_PROFILE_ID,
+    })
+
+    expect(settings.profiles.find((profile) => profile.id === DEFAULT_OPENAI_PROFILE_ID)).toMatchObject({
+      baseUrl: 'https://images.example.com/v1',
+      apiMode: 'images',
+      model: DEFAULT_IMAGES_MODEL,
+    })
+    expect(settings.baseUrl).toBe('https://images.example.com/v1')
+    expect(settings.apiMode).toBe('images')
+    expect(settings.model).toBe(DEFAULT_IMAGES_MODEL)
+  })
+
   it('replaces the default OpenAI profile with legacy imported settings when current settings are untouched', () => {
     const merged = mergeImportedSettings(DEFAULT_SETTINGS, {
       baseUrl: 'https://api.example.com/v1',
@@ -128,16 +213,17 @@ describe('mergeImportedSettings', () => {
       model: 'imported-model',
     })
 
-    expect(merged.profiles).toHaveLength(2)
+    expect(merged.profiles).toHaveLength(3)
     expect(merged.activeProfileId).toBe(DEFAULT_OPENAI_PROFILE_ID)
     expect(merged.profiles[0]).toMatchObject({ apiKey: 'current-key', model: 'current-model' })
-    expect(merged.profiles[1]).toMatchObject({
+    const importedProfile = merged.profiles.find((profile) => profile.apiKey === 'imported-key')
+    expect(importedProfile).toMatchObject({
       provider: 'openai',
       baseUrl: 'https://imported.example.com/v1',
       apiKey: 'imported-key',
       model: 'imported-model',
     })
-    expect(merged.profiles[1].id).not.toBe(DEFAULT_OPENAI_PROFILE_ID)
+    expect(importedProfile?.id).not.toBe(DEFAULT_OPENAI_PROFILE_ID)
   })
 
   it('appends imported profiles as new profiles when current settings are customized', () => {
@@ -176,12 +262,12 @@ describe('mergeImportedSettings', () => {
       activeProfileId: 'imported-fal',
     })
 
-    expect(merged.profiles).toHaveLength(3)
+    expect(merged.profiles).toHaveLength(4)
     expect(merged.activeProfileId).toBe(DEFAULT_OPENAI_PROFILE_ID)
     expect(merged.profiles[0]).toMatchObject({ apiKey: 'current-key', model: 'current-model' })
-    expect(merged.profiles[1]).toMatchObject({ name: 'Imported OpenAI', provider: 'openai', apiKey: 'imported-key' })
-    expect(merged.profiles[2]).toMatchObject({ name: 'Imported fal', provider: 'fal', apiKey: 'fal-key' })
-    expect(new Set(merged.profiles.map((profile) => profile.id)).size).toBe(3)
+    expect(merged.profiles.find((profile) => profile.name === 'Imported OpenAI')).toMatchObject({ provider: 'openai', apiKey: 'imported-key' })
+    expect(merged.profiles.find((profile) => profile.name === 'Imported fal')).toMatchObject({ provider: 'fal', apiKey: 'fal-key' })
+    expect(new Set(merged.profiles.map((profile) => profile.id)).size).toBe(4)
   })
 
   it('skips imported profiles that already exist in current customized settings', () => {
@@ -219,9 +305,9 @@ describe('mergeImportedSettings', () => {
       ],
     })
 
-    expect(merged.profiles).toHaveLength(2)
+    expect(merged.profiles).toHaveLength(3)
     expect(merged.profiles[0]).toMatchObject({ apiKey: 'current-key', model: 'current-model' })
-    expect(merged.profiles[1]).toMatchObject({ provider: 'fal', apiKey: 'fal-key', model: DEFAULT_FAL_MODEL })
+    expect(merged.profiles.find((profile) => profile.provider === 'fal')).toMatchObject({ apiKey: 'fal-key', model: DEFAULT_FAL_MODEL })
   })
 
   it('reuses an existing keyed profile when importing the same custom profile without an API key', () => {
@@ -313,7 +399,7 @@ describe('mergeImportedSettings', () => {
     })
 
     expect(merged.customProviders.map((provider) => provider.id)).toEqual(['custom-existing', 'custom-imported'])
-    expect(merged.profiles).toHaveLength(2)
+    expect(merged.profiles).toHaveLength(3)
   })
 
   it('appends imported custom providers and keeps imported custom profile references', () => {
@@ -350,8 +436,8 @@ describe('mergeImportedSettings', () => {
 
     expect(merged.customProviders).toHaveLength(1)
     expect(merged.customProviders[0]).toMatchObject({ id: 'custom-json', name: 'Custom JSON' })
-    expect(merged.profiles).toHaveLength(2)
-    expect(merged.profiles[1]).toMatchObject({
+    expect(merged.profiles).toHaveLength(3)
+    expect(merged.profiles.find((profile) => profile.name === 'Imported Custom')).toMatchObject({
       name: 'Imported Custom',
       provider: 'custom-json',
       apiKey: 'custom-key',

@@ -272,6 +272,9 @@ profiles 中不要包含 apiKey（用户导入后自行填写）。
 ## 统一任务接口示例
 {"customProviders":[{"id":"custom-example-task","name":"示例任务服务商","submit":{"path":"images/generations","method":"POST","contentType":"json","body":{"model":"$profile.model","prompt":"$prompt","n":"$params.n","size":"$params.size","resolution":"2k","quality":"$params.quality","image_urls":"$inputImages.dataUrls"},"taskIdPath":"data.0.task_id"},"poll":{"path":"tasks/{task_id}","method":"GET","query":{"language":"zh"},"intervalSeconds":5,"statusPath":"data.status","successValues":["completed"],"failureValues":["failed","cancelled"],"errorPath":"data.error.message","result":{"imageUrlPaths":["data.result.images.*.url.*"],"b64JsonPaths":[]}}}],"profiles":[{"name":"示例任务服务商","provider":"custom-example-task","baseUrl":"","model":"gpt-image-2","apiMode":"images"}]}`
 
+const normalizeDraftSettings = (value: Partial<AppSettings> | unknown) =>
+  normalizeSettings(value)
+
 export default function SettingsModal() {
   const showSettings = useStore((s) => s.showSettings)
   const settingsTabRequest = useStore((s) => s.settingsTabRequest)
@@ -292,7 +295,7 @@ export default function SettingsModal() {
   const settingsScrollBoundaryRef = useRef<HTMLDivElement>(null)
   const customProviderScrollBoundaryRef = useRef<HTMLDivElement>(null)
   
-  const [draft, setDraft] = useState<AppSettings>(normalizeSettings(settings))
+  const [draft, setDraft] = useState<AppSettings>(normalizeDraftSettings(settings))
   const [timeoutInput, setTimeoutInput] = useState(String(getActiveApiProfile(settings).timeout))
   const [showApiKey, setShowApiKey] = useState(false)
   const [showProfileMenu, setShowProfileMenu] = useState(false)
@@ -398,11 +401,11 @@ export default function SettingsModal() {
     if (wasSettingsOpenRef.current) return
 
     wasSettingsOpenRef.current = true
-    const normalizedSettings = normalizeSettings(settings)
+    const normalizedSettings = normalizeDraftSettings(settings)
     const displaySettings = normalizedSettings.reuseTaskApiProfileTemporarily && reusedTaskApiProfileId && normalizedSettings.profiles.some((profile) => profile.id === reusedTaskApiProfileId)
-      ? normalizeSettings({ ...normalizedSettings, activeProfileId: reusedTaskApiProfileId })
+      ? normalizeDraftSettings({ ...normalizedSettings, activeProfileId: reusedTaskApiProfileId })
       : normalizedSettings
-    const nextDraft = normalizeSettings({
+    const nextDraft = normalizeDraftSettings({
       ...displaySettings,
       profiles: displaySettings.profiles.map((profile) => ({
         ...profile,
@@ -515,12 +518,23 @@ export default function SettingsModal() {
       }
     })
     const fallbackProfile = createDefaultOpenAIProfile({ id: newId('openai') })
-    const normalizedDraft = normalizeSettings({
+    const nextActiveProfileId = normalizedProfiles.some((profile) => profile.id === nextDraft.activeProfileId)
+      ? nextDraft.activeProfileId
+      : (normalizedProfiles[0]?.id ?? fallbackProfile.id)
+    const nextActiveProfile = normalizedProfiles.find((profile) => profile.id === nextActiveProfileId) ?? normalizedProfiles[0] ?? fallbackProfile
+    const normalizedDraft = normalizeDraftSettings({
       ...nextDraft,
+      baseUrl: nextActiveProfile.baseUrl,
+      apiKey: nextActiveProfile.apiKey,
+      model: nextActiveProfile.model,
+      timeout: nextActiveProfile.timeout,
+      apiMode: nextActiveProfile.apiMode,
+      codexCli: nextActiveProfile.codexCli,
+      apiProxy: nextActiveProfile.apiProxy,
+      streamImages: nextActiveProfile.streamImages,
+      streamPartialImages: nextActiveProfile.streamPartialImages,
       profiles: normalizedProfiles.length ? normalizedProfiles : [fallbackProfile],
-      activeProfileId: normalizedProfiles.some((profile) => profile.id === nextDraft.activeProfileId)
-        ? nextDraft.activeProfileId
-        : (normalizedProfiles[0]?.id ?? fallbackProfile.id),
+      activeProfileId: nextActiveProfileId,
     })
     setDraft(normalizedDraft)
     setSettings(normalizedDraft)
@@ -659,7 +673,7 @@ export default function SettingsModal() {
       try {
         const imported = await importData(file, { importConfig, importTasks })
         if (imported) {
-          const nextDraft = normalizeSettings(useStore.getState().settings)
+          const nextDraft = normalizeDraftSettings(useStore.getState().settings)
           setDraft(nextDraft)
           setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
           setShowProfileMenu(false)
@@ -673,7 +687,7 @@ export default function SettingsModal() {
 
   const handleClearAllData = async () => {
     await clearData({ clearConfig, clearTasks })
-    const nextDraft = normalizeSettings(useStore.getState().settings)
+    const nextDraft = normalizeDraftSettings(useStore.getState().settings)
     setDraft(nextDraft)
     setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
     setShowProfileMenu(false)
@@ -682,10 +696,10 @@ export default function SettingsModal() {
   const createNewProfile = () => {
     setReusedTaskApiProfile(null)
     const profile = createDefaultOpenAIProfile({ id: newId('openai'), name: '新配置' })
-    const nextDraft = normalizeSettings({ 
-        ...draft, 
-        profiles: [...draft.profiles, profile],
-        activeProfileId: profile.id
+    const nextDraft = normalizeDraftSettings({
+      ...draft,
+      profiles: [...draft.profiles, profile],
+      activeProfileId: profile.id,
     })
     commitSettings(nextDraft)
     setShowProfileMenu(false)
@@ -699,7 +713,7 @@ export default function SettingsModal() {
       id: newId(activeProfile.provider === 'openai' ? 'openai' : 'profile'),
       name: `${activeProfile.name}（复制）`,
     }
-    const nextDraft = normalizeSettings({
+    const nextDraft = normalizeDraftSettings({
       ...draft,
       profiles: [...draft.profiles, profile],
       activeProfileId: profile.id,
@@ -710,7 +724,7 @@ export default function SettingsModal() {
 
   const switchProfile = (id: string) => {
     setReusedTaskApiProfile(null)
-    const nextDraft = normalizeSettings({ ...draft, activeProfileId: id })
+    const nextDraft = normalizeDraftSettings({ ...draft, activeProfileId: id })
     commitSettings(nextDraft)
     setShowProfileMenu(false)
   }
@@ -771,7 +785,7 @@ export default function SettingsModal() {
 
     newProfiles.splice(newTargetIndex, 0, removed)
 
-    const nextDraft = normalizeSettings({ ...draft, profiles: newProfiles })
+    const nextDraft = normalizeDraftSettings({ ...draft, profiles: newProfiles })
     commitSettings(nextDraft)
   }
 
@@ -856,7 +870,7 @@ export default function SettingsModal() {
     if (draft.profiles.length <= 1) return
     if (id === reusedTaskApiProfileId) setReusedTaskApiProfile(null)
     const nextProfiles = draft.profiles.filter((item) => item.id !== id)
-    const nextDraft = normalizeSettings({
+    const nextDraft = normalizeDraftSettings({
       ...draft,
       profiles: nextProfiles,
       activeProfileId: draft.activeProfileId === id ? nextProfiles[0].id : draft.activeProfileId,
@@ -879,7 +893,7 @@ export default function SettingsModal() {
 
     newOrder.splice(newTargetIndex, 0, removed)
 
-    const nextDraft = normalizeSettings({ ...draft, providerOrder: newOrder })
+    const nextDraft = normalizeDraftSettings({ ...draft, providerOrder: newOrder })
     commitSettings(nextDraft)
   }
 
@@ -930,7 +944,7 @@ export default function SettingsModal() {
     try {
       const customProvider = buildCustomProviderFromForm()
       if (editingCustomProviderId) {
-        const nextDraft = normalizeSettings({
+        const nextDraft = normalizeDraftSettings({
           ...draft,
           customProviders: draft.customProviders.map((provider) =>
             provider.id === editingCustomProviderId ? customProvider : provider,
@@ -945,7 +959,7 @@ export default function SettingsModal() {
       }
 
       const nextProfile = switchApiProfileProvider(activeProfile, customProvider.id, customProvider)
-      const nextDraft = normalizeSettings({
+      const nextDraft = normalizeDraftSettings({
         ...draft,
         customProviders: [...draft.customProviders, customProvider],
         profiles: draft.profiles.map((profile) => profile.id === activeProfile.id ? nextProfile : profile),
@@ -969,7 +983,7 @@ export default function SettingsModal() {
 
   function deleteCustomProvider(provider: CustomProviderDefinition) {
     const providerId = provider.id
-    const nextDraft = normalizeSettings({
+    const nextDraft = normalizeDraftSettings({
       ...draft,
       customProviders: draft.customProviders.filter((provider) => provider.id !== providerId),
       profiles: draft.profiles.map((profile) =>
@@ -1005,14 +1019,14 @@ export default function SettingsModal() {
         const shouldReplaceActiveProfile = !editingCustomProviderId && isPristineNewOpenAIProfile(activeProfile) && !importedProfileAlreadyExisted
         const switchedToExistingProfile = !shouldReplaceActiveProfile && importedProfileAlreadyExisted
         const nextDraft = shouldReplaceActiveProfile
-          ? normalizeSettings({
+          ? normalizeDraftSettings({
               ...mergedDraft,
               profiles: mergedDraft.profiles
                 .filter((profile) => profile.id === activeProfile.id || profile.id !== importedProfile.id)
                 .map((profile) => profile.id === activeProfile.id ? { ...importedProfile, id: activeProfile.id } : profile),
               activeProfileId: activeProfile.id,
             })
-          : normalizeSettings({
+          : normalizeDraftSettings({
               ...mergedDraft,
               activeProfileId: importedProfile.id,
             })
@@ -1434,7 +1448,7 @@ export default function SettingsModal() {
                   className="w-full rounded-xl border border-blue-200/70 bg-white/80 px-3 py-2.5 text-sm text-blue-900 outline-none transition focus:border-blue-300 dark:border-blue-400/20 dark:bg-gray-950/40 dark:text-blue-100 dark:focus:border-blue-500/50"
                 />
                 <div data-selectable-text className="mt-2 text-xs leading-relaxed text-blue-800 dark:text-blue-200">
-                  只用于首页 Amazon 面板的 AI 策划；生图仍使用上方当前配置。建议保留一个 Images API + gpt-image-2 配置用于生图，再建一个 Chat Completions 文本模型配置用于策划。
+                  只用于首页 Amazon 面板的 AI 策划；生图仍使用上方当前配置。默认分为「生图」和「AI策划」两套配置：生图使用 Images API + gpt-image-2，AI 策划使用 Responses API + gpt-5.5。
                 </div>
               </div>
 

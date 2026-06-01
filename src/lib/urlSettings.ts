@@ -66,7 +66,7 @@ function activateFirstImportedProfile(settings: AppSettings, importedSettings: u
   const imported = normalizeSettings({
     customProviders: record.customProviders,
     profiles: record.profiles,
-  })
+  }, { splitDefaultProfiles: false })
   const importedProfile = imported.profiles[0]
   const activeProfile = findEquivalentApiProfile(settings, importedProfile, imported.customProviders)
 

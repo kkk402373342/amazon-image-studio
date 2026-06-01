@@ -24,6 +24,7 @@ export const DEFAULT_CHAT_MODEL = 'gpt-5.5'
 export const DEFAULT_FAL_BASE_URL = 'https://fal.run'
 export const DEFAULT_FAL_MODEL = 'openai/gpt-image-2'
 export const DEFAULT_OPENAI_PROFILE_ID = 'default-openai'
+export const DEFAULT_AMAZON_PLANNER_PROFILE_ID = 'default-openai-planner'
 export const DEFAULT_API_TIMEOUT = 600
 
 const BUILT_IN_PROVIDER_IDS = new Set<ApiProvider>(['openai', 'fal'])
@@ -294,6 +295,26 @@ export function createDefaultOpenAIProfile(overrides: Partial<ApiProfile> = {}):
   }
 }
 
+export function createDefaultImageProfile(overrides: Partial<ApiProfile> = {}): ApiProfile {
+  return createDefaultOpenAIProfile({
+    id: DEFAULT_OPENAI_PROFILE_ID,
+    name: '生图',
+    model: DEFAULT_IMAGES_MODEL,
+    apiMode: 'images',
+    ...overrides,
+  })
+}
+
+export function createDefaultAmazonPlannerProfile(overrides: Partial<ApiProfile> = {}): ApiProfile {
+  return createDefaultOpenAIProfile({
+    id: DEFAULT_AMAZON_PLANNER_PROFILE_ID,
+    name: 'AI策划',
+    model: DEFAULT_RESPONSES_MODEL,
+    apiMode: 'responses',
+    ...overrides,
+  })
+}
+
 export function createDefaultFalProfile(overrides: Partial<ApiProfile> = {}): ApiProfile {
   return {
     id: `fal-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
@@ -419,6 +440,88 @@ function resolveAmazonPlannerProfileId(profiles: ApiProfile[], value: unknown): 
   return profiles.find(isAmazonPlannerProfile)?.id ?? ''
 }
 
+function createDefaultProfilePair(overrides: Partial<ApiProfile> = {}): ApiProfile[] {
+  return [
+    createDefaultImageProfile(overrides),
+    createDefaultAmazonPlannerProfile(overrides),
+  ]
+}
+
+function isSingleDefaultOpenAIProfileCandidate(profile: ApiProfile): boolean {
+  return profile.provider === 'openai' && profile.id === DEFAULT_OPENAI_PROFILE_ID
+}
+
+function splitSingleDefaultOpenAIProfile(profile: ApiProfile): ApiProfile[] | null {
+  if (!isSingleDefaultOpenAIProfileCandidate(profile)) return null
+
+  const shared = {
+    baseUrl: profile.baseUrl,
+    apiKey: profile.apiKey,
+    timeout: profile.timeout,
+    codexCli: profile.codexCli,
+    apiProxy: profile.apiProxy,
+    responseFormatB64Json: profile.responseFormatB64Json,
+    streamImages: profile.streamImages,
+    streamPartialImages: profile.streamPartialImages,
+  }
+
+  if (isAmazonPlannerProfile(profile)) {
+    return [
+      createDefaultImageProfile({
+        ...shared,
+        codexCli: false,
+        model: DEFAULT_IMAGES_MODEL,
+        apiMode: 'images',
+      }),
+      createDefaultAmazonPlannerProfile({
+        ...shared,
+        model: profile.model.trim() || DEFAULT_RESPONSES_MODEL,
+        apiMode: profile.apiMode,
+      }),
+    ]
+  }
+
+  return [
+    createDefaultImageProfile({
+      ...shared,
+      model: profile.model.trim() || DEFAULT_IMAGES_MODEL,
+      apiMode: 'images',
+    }),
+    createDefaultAmazonPlannerProfile(shared),
+  ]
+}
+
+function hasTopLevelProfileFields(record: Record<string, unknown>): boolean {
+  return record.baseUrl !== undefined ||
+    record.apiKey !== undefined ||
+    record.model !== undefined ||
+    record.timeout !== undefined ||
+    record.apiMode !== undefined ||
+    record.codexCli !== undefined ||
+    record.apiProxy !== undefined ||
+    record.streamImages !== undefined ||
+    record.streamPartialImages !== undefined
+}
+
+interface NormalizeSettingsOptions {
+  splitDefaultProfiles?: boolean
+}
+
+function normalizeDefaultProfileSet(
+  profiles: ApiProfile[],
+  hasExplicitProfiles: boolean,
+  legacyProfile: ApiProfile,
+  hasLegacyFields: boolean,
+  splitDefaultProfiles: boolean,
+): ApiProfile[] {
+  if (!hasExplicitProfiles) return hasLegacyFields ? [legacyProfile] : createDefaultProfilePair()
+  if (!splitDefaultProfiles) return profiles
+  if (profiles.length !== 1) return profiles
+
+  const splitProfiles = splitSingleDefaultOpenAIProfile(profiles[0])
+  return splitProfiles ?? profiles
+}
+
 export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfile>, customProviderIds = new Set<string>()): ApiProfile {
   const record = input && typeof input === 'object' ? input as Record<string, unknown> : {}
   const rawProvider = typeof record.provider === 'string' ? record.provider : ''
@@ -459,8 +562,9 @@ function validateImportedProfileRecord(input: unknown) {
   }
 }
 
-export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSettings {
+export function normalizeSettings(input: Partial<AppSettings> | unknown, options: NormalizeSettingsOptions = {}): AppSettings {
   const record = input && typeof input === 'object' ? input as Record<string, unknown> : {}
+  const splitDefaultProfiles = options.splitDefaultProfiles ?? true
   const customProviders = normalizeCustomProviderDefinitions(record.customProviders)
   const customProviderIds = new Set(customProviders.map((provider) => provider.id))
   const legacyProfile = createDefaultOpenAIProfile({
@@ -475,9 +579,16 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : true,
     streamPartialImages: normalizeStreamPartialImages(record.streamPartialImages),
   })
-  const profiles = Array.isArray(record.profiles) && record.profiles.length
-    ? record.profiles.map((profile) => normalizeApiProfile(profile, undefined, customProviderIds))
-    : [legacyProfile]
+  const hasExplicitProfiles = Array.isArray(record.profiles) && record.profiles.length > 0
+  let profiles = normalizeDefaultProfileSet(
+    hasExplicitProfiles
+      ? (record.profiles as unknown[]).map((profile) => normalizeApiProfile(profile, undefined, customProviderIds))
+      : [legacyProfile],
+    hasExplicitProfiles,
+    legacyProfile,
+    !hasExplicitProfiles && hasTopLevelProfileFields(record),
+    splitDefaultProfiles,
+  )
   const activeProfileId = typeof record.activeProfileId === 'string' && profiles.some((p) => p.id === record.activeProfileId)
     ? record.activeProfileId
     : profiles[0].id
@@ -620,7 +731,7 @@ export function validateApiProfile(profile: ApiProfile): string | null {
 
 function isDefaultOpenAIProfile(profile: ApiProfile): boolean {
   return profile.id === DEFAULT_OPENAI_PROFILE_ID &&
-    profile.name === '默认' &&
+    profile.name === '生图' &&
     profile.provider === 'openai' &&
     profile.baseUrl === DEFAULT_BASE_URL &&
     profile.apiKey === '' &&
@@ -633,11 +744,28 @@ function isDefaultOpenAIProfile(profile: ApiProfile): boolean {
     profile.streamPartialImages === DEFAULT_STREAM_PARTIAL_IMAGES
 }
 
+function isDefaultAmazonPlannerProfile(profile: ApiProfile): boolean {
+  return profile.id === DEFAULT_AMAZON_PLANNER_PROFILE_ID &&
+    profile.name === 'AI策划' &&
+    profile.provider === 'openai' &&
+    profile.baseUrl === DEFAULT_BASE_URL &&
+    profile.apiKey === '' &&
+    profile.model === DEFAULT_RESPONSES_MODEL &&
+    profile.timeout === DEFAULT_API_TIMEOUT &&
+    profile.apiMode === 'responses' &&
+    profile.codexCli === false &&
+    profile.apiProxy === DEFAULT_OPENAI_API_PROXY &&
+    profile.streamImages === false &&
+    profile.streamPartialImages === DEFAULT_STREAM_PARTIAL_IMAGES
+}
+
 function hasOnlyDefaultProfiles(settings: AppSettings): boolean {
   return settings.customProviders.length === 0 &&
-    settings.profiles.length === 1 &&
+    settings.profiles.length === 2 &&
     settings.activeProfileId === DEFAULT_OPENAI_PROFILE_ID &&
-    isDefaultOpenAIProfile(settings.profiles[0])
+    settings.amazonPlannerProfileId === DEFAULT_AMAZON_PLANNER_PROFILE_ID &&
+    settings.profiles.some(isDefaultOpenAIProfile) &&
+    settings.profiles.some(isDefaultAmazonPlannerProfile)
 }
 
 function createImportedProfileId(provider: ApiProvider, usedIds: Set<string>): string {
@@ -744,11 +872,11 @@ export function findEquivalentApiProfile(
 
 export function mergeImportedSettings(currentSettings: Partial<AppSettings> | unknown, importedSettings: Partial<AppSettings> | unknown): AppSettings {
   const current = normalizeSettings(currentSettings)
-  const normalizedImported = normalizeSettings(importedSettings)
+  const normalizedImported = normalizeSettings(importedSettings, { splitDefaultProfiles: false })
   const imported = normalizeSettings({
     ...normalizedImported,
     profiles: dedupeApiProfiles(normalizedImported.profiles),
-  })
+  }, { splitDefaultProfiles: false })
 
   if (hasOnlyDefaultProfiles(current)) {
     return imported
@@ -797,5 +925,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   agentScrollToBottomAfterSubmit: true,
   agentMaxToolRounds: DEFAULT_AGENT_MAX_TOOL_ROUNDS,
   agentWebSearch: false,
-  amazonPlannerProfileId: '',
+  profiles: createDefaultProfilePair(),
+  activeProfileId: DEFAULT_OPENAI_PROFILE_ID,
+  amazonPlannerProfileId: DEFAULT_AMAZON_PLANNER_PROFILE_ID,
 })
