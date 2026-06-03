@@ -30,6 +30,7 @@ import { callAmazonPlannerApi, type PlannerApiResult } from '../lib/listingPlann
 import { callImageApi } from '../lib/api'
 import { deleteAmazonPlannerSession, getAllAmazonPlannerSessions, putAmazonPlannerSession, storeImage } from '../lib/db'
 import { normalizeParamsForSettings } from '../lib/paramCompatibility'
+import { prepareReferenceImagePayload, type PlannerReferenceImagePayload } from '../lib/referenceImagePayload'
 import { DEFAULT_PARAMS } from '../types'
 import type { AmazonPlannerSession } from '../types'
 import { ChevronLeftIcon, ChevronRightIcon, CloseIcon, CopyIcon, EyeIcon, HistoryIcon, PhotoIcon, PlusIcon, TrashIcon } from './icons'
@@ -323,6 +324,8 @@ export default function AmazonPlanner() {
   const [showPlannerHistory, setShowPlannerHistory] = useState(false)
   const [isPlanning, setIsPlanning] = useState(false)
   const [plannerError, setPlannerError] = useState('')
+  const [isPreparingReferencePayload, setIsPreparingReferencePayload] = useState(false)
+  const [referencePayloadNotice, setReferencePayloadNotice] = useState('')
   const [actionProgress, setActionProgress] = useState<PlannerActionProgressMap>({})
   const resolutionTier = resolution === '4k' ? '4K' : '2K'
   const aPlusSpecs = useMemo(() => getAPlusModuleSpecs(aPlusType), [aPlusType])
@@ -487,6 +490,10 @@ export default function AmazonPlanner() {
     }
   }, [])
 
+  useEffect(() => {
+    setReferencePayloadNotice('')
+  }, [inputImages])
+
   const upsertPlannerSessionList = (session: AmazonPlannerSession) => {
     setPlannerSessions((current) => sortPlannerSessions([
       session,
@@ -630,6 +637,23 @@ export default function AmazonPlanner() {
     }
   }
 
+  const prepareReferencePayloadForRequest = async (dataUrls: string[], signal?: AbortSignal): Promise<PlannerReferenceImagePayload> => {
+    if (!dataUrls.length) {
+      setReferencePayloadNotice('')
+      return prepareReferenceImagePayload([], { signal })
+    }
+
+    setIsPreparingReferencePayload(true)
+    setReferencePayloadNotice('')
+    try {
+      const payload = await prepareReferenceImagePayload(dataUrls, { signal })
+      if (payload.notice) setReferencePayloadNotice(payload.notice)
+      return payload
+    } finally {
+      setIsPreparingReferencePayload(false)
+    }
+  }
+
   const generateStyleImages = async () => {
     if (!styleCandidates.length) {
       showToast('请先完成 AI 策划，再生成风格板', 'error')
@@ -672,7 +696,18 @@ export default function AmazonPlanner() {
       moderation: params.moderation,
       n: 1,
     }, normalizedSettings, { hasInputImages: inputImages.length > 0 })
-    const referenceImages = inputImages.map((image) => image.dataUrl)
+    let referenceImages: string[]
+    try {
+      const referencePayload = await prepareReferencePayloadForRequest(inputImages.map((image) => image.dataUrl))
+      referenceImages = referencePayload.dataUrls
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setStyleImages([])
+      setIsGeneratingStyleImages(false)
+      setStyleError(message)
+      showToast('风格板生成失败，请查看详情', 'error')
+      return
+    }
 
     const settled = await Promise.allSettled(styleCandidates.map(async (candidate, candidateIndex) => {
       const result = await callImageApi({
@@ -807,11 +842,12 @@ export default function AmazonPlanner() {
     setIsPlanning(true)
     setPlannerError('')
     try {
+      const referencePayload = await prepareReferencePayloadForRequest(inputImages.map((image) => image.dataUrl), controller.signal)
       const result = await callAmazonPlannerApi({
         listingText,
         baseDraft: draft,
         profile: plannerProfile,
-        referenceImageDataUrls: inputImages.map((image) => image.dataUrl),
+        referenceImageDataUrls: referencePayload.dataUrls,
         mode: plannerMode,
         aPlusType,
         aPlusGenerationTier: resolutionTier,
@@ -1290,7 +1326,7 @@ export default function AmazonPlanner() {
               </div>
             </div>
             <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs leading-relaxed text-blue-800 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-200">
-              生图使用当前图像生成配置；AI策划使用设置中单独指定的 Chat/Responses 文本配置，不需要来回切换接口类型。
+              AI策划使用设置中的策划配置，生图配置保持不变。
             </div>
             {plannerError && (
               <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs leading-relaxed text-red-800 dark:border-red-400/20 dark:bg-red-400/10 dark:text-red-200">
@@ -1355,6 +1391,12 @@ export default function AmazonPlanner() {
                 )}
               </div>
             </div>
+
+            {(isPreparingReferencePayload || referencePayloadNotice) && (
+              <div className={`mt-3 rounded-lg border px-3 py-2 text-xs leading-relaxed ${isPreparingReferencePayload ? 'border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-200' : 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-200'}`}>
+                {isPreparingReferencePayload ? '正在压缩参考图...' : referencePayloadNotice}
+              </div>
+            )}
 
             {inputImages.length > 0 ? (
               <div className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(64px,1fr))] gap-2 sm:grid-cols-[repeat(auto-fill,72px)]">

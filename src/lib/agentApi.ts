@@ -1,6 +1,7 @@
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { getApiErrorMessage, MIME_MAP, normalizeBase64Image, pickActualParams } from './imageApiShared'
+import { prepareReferenceImageAndMaskPayload, prepareReferenceImagePayload } from './referenceImagePayload'
 
 export interface AgentApiMessage {
   role: 'user' | 'assistant'
@@ -193,6 +194,41 @@ function isEventStreamResponse(response: Response): boolean {
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function collectResponsesInputImageDataUrls(value: unknown, output: string[] = []): string[] {
+  if (Array.isArray(value)) {
+    for (const item of value) collectResponsesInputImageDataUrls(item, output)
+    return output
+  }
+  if (!isRecordValue(value)) return output
+
+  if (value.type === 'input_image' && typeof value.image_url === 'string' && value.image_url.startsWith('data:')) {
+    output.push(value.image_url)
+    return output
+  }
+
+  for (const child of Object.values(value)) collectResponsesInputImageDataUrls(child, output)
+  return output
+}
+
+function replaceResponsesInputImageDataUrls(value: unknown, replacements: string[], cursor: { index: number }): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => replaceResponsesInputImageDataUrls(item, replacements, cursor))
+  }
+  if (!isRecordValue(value)) return value
+
+  if (value.type === 'input_image' && typeof value.image_url === 'string' && value.image_url.startsWith('data:')) {
+    const nextUrl = replacements[cursor.index] ?? value.image_url
+    cursor.index += 1
+    return { ...value, image_url: nextUrl }
+  }
+
+  const next: Record<string, unknown> = {}
+  for (const [key, child] of Object.entries(value)) {
+    next[key] = replaceResponsesInputImageDataUrls(child, replacements, cursor)
+  }
+  return next
 }
 
 function getStringValue(source: Record<string, unknown>, key: string): string | undefined {
@@ -625,11 +661,17 @@ export async function callAgentResponsesApi(opts: {
   signal?.addEventListener('abort', abortFromCaller, { once: true })
 
   try {
+    const inputImageDataUrls = collectResponsesInputImageDataUrls(input)
+    const preparedPayload = await prepareReferenceImageAndMaskPayload(inputImageDataUrls, maskDataUrl, { signal: controller.signal })
+    const preparedInput = preparedPayload.dataUrls.length
+      ? replaceResponsesInputImageDataUrls(input, preparedPayload.dataUrls, { index: 0 })
+      : input
+
     const body: Record<string, unknown> = {
       model: profile.model || settings.model,
       instructions: createAgentInstructions(settings),
-      input,
-      tools: createAgentTools(params, profile, settings, maskDataUrl),
+      input: preparedInput,
+      tools: createAgentTools(params, profile, settings, preparedPayload.maskDataUrl),
     }
     if (profile.streamImages) {
       body.stream = true
@@ -683,10 +725,11 @@ export async function callAgentConversationTitleApi(opts: {
   signal?.addEventListener('abort', abortFromCaller, { once: true })
 
   try {
+    const preparedPayload = await prepareReferenceImagePayload(imageDataUrls ?? [], { signal: controller.signal })
     const content: Array<Record<string, string>> = [
       { type: 'input_text', text: `The following is the first message the user sent in a conversation. Generate a title for this conversation.\n\n${prompt}` },
     ]
-    for (const dataUrl of imageDataUrls ?? []) {
+    for (const dataUrl of preparedPayload.dataUrls) {
       content.push({ type: 'input_image', image_url: dataUrl })
     }
 
@@ -760,18 +803,20 @@ export async function callBatchImageSingle(opts: {
   signal?.addEventListener('abort', abortFromCaller, { once: true })
 
   try {
+    const preparedReferencePayload = await prepareReferenceImagePayload(referenceImageDataUrls, { signal: controller.signal })
+    const apiReferenceImageDataUrls = preparedReferencePayload.dataUrls
     // Build input: reference id mapping + prompt-rewrite guard + reference images.
-    const referenceMapping = referenceImageDataUrls.length > 0
+    const referenceMapping = apiReferenceImageDataUrls.length > 0
       ? `Attached reference images correspond to these ids, in order: ${(referenceIds ?? []).map((id) => `<ref id="${id}" />`).join(', ') || 'reference images'}.`
       : ''
     const guardedPrompt = [referenceMapping, `${PROMPT_REWRITE_GUARD_PREFIX}\n${prompt}`].filter(Boolean).join('\n\n')
     let input: unknown
-    if (referenceImageDataUrls.length > 0) {
+    if (apiReferenceImageDataUrls.length > 0) {
       input = [{
         role: 'user',
         content: [
           { type: 'input_text', text: guardedPrompt },
-          ...referenceImageDataUrls.map((dataUrl) => ({
+          ...apiReferenceImageDataUrls.map((dataUrl) => ({
             type: 'input_image',
             image_url: dataUrl,
           })),
@@ -784,7 +829,7 @@ export async function callBatchImageSingle(opts: {
     // Build image_generation tool with current params
     const tool: Record<string, unknown> = {
       type: 'image_generation',
-      action: referenceImageDataUrls.length > 0 ? 'auto' : 'generate',
+      action: apiReferenceImageDataUrls.length > 0 ? 'auto' : 'generate',
       size: params.size,
       output_format: params.output_format,
       moderation: params.moderation,

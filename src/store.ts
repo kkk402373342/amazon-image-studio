@@ -52,6 +52,7 @@ import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
+import { prepareReferenceImageAndMaskPayload } from './lib/referenceImagePayload'
 import { getTaskHistoryCategory } from './lib/taskHistory'
 import { isAmazonListingMainSlot } from './lib/listingPlanner'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
@@ -3585,13 +3586,16 @@ async function executeTask(taskId: string) {
       maskDataUrl = await ensureImageCached(task.maskImageId)
       if (!maskDataUrl) throw new Error('遮罩图片已不存在')
     }
+    const preparedPayload = await prepareReferenceImageAndMaskPayload(inputDataUrls, maskDataUrl)
+    const apiInputDataUrls = preparedPayload.dataUrls
+    const apiMaskDataUrl = preparedPayload.maskDataUrl
 
     const result = await callImageApi({
       settings: requestSettings,
       prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
       params: task.params,
-      inputImageDataUrls: inputDataUrls,
-      maskDataUrl,
+      inputImageDataUrls: apiInputDataUrls,
+      maskDataUrl: apiMaskDataUrl,
       onFalRequestEnqueued: (request) => {
         falRequestInfo = request
         updateTaskInStore(taskId, {
