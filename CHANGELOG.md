@@ -3,6 +3,16 @@
 按自然周（周一至周日）整理，最新一周在最上方。每个周块可展开查看本周推送内容，提交号用于回溯具体改动。
 
 <details>
+<summary><strong>2026-06-08 至 2026-06-14</strong> - DeepSeek 策划兼容与部署提示</summary>
+
+- AI 策划检测到 `https://api.deepseek.com` 时自动跳过参考图，仅发送纯文本 Chat Completions 请求，避免 DeepSeek 官方接口因 `image_url` 报错。
+- 补充 DeepSeek 策划配置说明，明确官方 Chat Completions 当前不接收参考图。
+- 补充 Vercel 体验版调用 HTTP API 的 HTTPS 安全策略提示。
+- 提交：`8927ad1`、`8a42d09`。
+
+</details>
+
+<details>
 <summary><strong>2026-06-01 至 2026-06-07</strong> - OpenRouter、参考图压缩与策划体验</summary>
 
 - OpenRouter 生图改走 Chat Completions 图片生成，修复普通 Images API 路径下的 404。
