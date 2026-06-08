@@ -15,8 +15,9 @@
 
 - AI 策划检测到 `https://api.deepseek.com` 时自动跳过参考图，仅发送纯文本 Chat Completions 请求，避免 DeepSeek 官方接口因 `image_url` 报错。
 - 补充 DeepSeek 策划配置说明，明确官方 Chat Completions 当前不接收参考图。
+- DeepSeek Chat Completions 和 Responses 策划统一按纯文本模型处理，增加反脑补约束，并在设置页和 Amazon 面板提示用户补齐产品关键特征。
 - 补充 Vercel 体验版调用 HTTP API 的 HTTPS 安全策略提示。
-- 提交：`8927ad1`、`8a42d09`。
+- 提交：`8927ad1`、`8a42d09`、`b2ab475`。
 
 </details>
 
