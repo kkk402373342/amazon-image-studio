@@ -14,6 +14,7 @@ import {
   getAmazonPlannerProfile,
   importCustomProviderDefinitionFromJson,
   importCustomProviderSettingsFromJson,
+  isOfficialDeepSeekPlannerProfile,
   isOpenRouterImageGenerationProfile,
   mergeImportedSettings,
   normalizeSettings,
@@ -759,6 +760,38 @@ describe('OpenRouter image generation profiles', () => {
 
   it('does not treat non-OpenRouter chat profiles as image-capable', () => {
     expect(isOpenRouterImageGenerationProfile(createDefaultOpenAIProfile({
+      baseUrl: 'https://api.deepseek.com',
+      apiMode: 'chat',
+    }))).toBe(false)
+  })
+})
+
+describe('official DeepSeek planner profiles', () => {
+  it('recognizes official DeepSeek chat and responses planner profiles', () => {
+    expect(isOfficialDeepSeekPlannerProfile(createDefaultOpenAIProfile({
+      baseUrl: 'https://api.deepseek.com',
+      apiMode: 'chat',
+    }))).toBe(true)
+    expect(isOfficialDeepSeekPlannerProfile(createDefaultOpenAIProfile({
+      baseUrl: 'api.deepseek.com',
+      apiMode: 'responses',
+    }))).toBe(true)
+  })
+
+  it('does not match non-planner or non-official DeepSeek-like profiles', () => {
+    expect(isOfficialDeepSeekPlannerProfile(createDefaultOpenAIProfile({
+      baseUrl: 'https://api.deepseek.com',
+      apiMode: 'images',
+    }))).toBe(false)
+    expect(isOfficialDeepSeekPlannerProfile(createDefaultOpenAIProfile({
+      baseUrl: 'https://deepseek.example.com',
+      apiMode: 'chat',
+    }))).toBe(false)
+    expect(isOfficialDeepSeekPlannerProfile(createDefaultOpenAIProfile({
+      baseUrl: 'https://openrouter.ai/api/v1',
+      apiMode: 'chat',
+    }))).toBe(false)
+    expect(isOfficialDeepSeekPlannerProfile(createDefaultFalProfile({
       baseUrl: 'https://api.deepseek.com',
       apiMode: 'chat',
     }))).toBe(false)

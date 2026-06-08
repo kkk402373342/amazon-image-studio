@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { addImageFromFile, ensureImageCached, submitTask, useStore } from '../store'
-import { getAmazonPlannerProfile, validateApiProfile } from '../lib/apiProfiles'
+import { getAmazonPlannerProfile, isOfficialDeepSeekPlannerProfile, validateApiProfile } from '../lib/apiProfiles'
 import {
   DEFAULT_AMAZON_PROMPT_DRAFT,
   type AmazonPromptDraft,
@@ -43,6 +43,7 @@ const FIELD_CLASS = 'w-full rounded-lg border border-gray-200 bg-white px-3 py-2
 const LABEL_CLASS = 'mb-1.5 block text-xs font-medium text-gray-500 dark:text-gray-400'
 const PLAN_LIST_CLASS = 'grid max-h-[420px] gap-2 overflow-y-auto overscroll-contain pr-1 custom-scrollbar sm:max-h-[480px]'
 const GUIDE_HINT_CLASS = 'mb-3 rounded-lg border border-blue-200 bg-white/85 px-3 py-2 text-xs font-medium leading-relaxed text-blue-800 shadow-sm dark:border-blue-400/25 dark:bg-blue-400/10 dark:text-blue-100'
+const DEEPSEEK_PLANNER_NOTICE = '当前 AI 策划配置为 DeepSeek 官方接口。DeepSeek 策划阶段不会读取参考图，系统会仅用 Listing 文本和你填写的商品信息生成策划；参考图仍会在正式生图时随生图请求发送。请把产品颜色、形状、结构、配件、Logo、套装数量等关键特征写进 Listing 或商品信息中。'
 const API_MAX_IMAGES = 16
 const STYLE_PREVIEW_WIDTH = 420
 const STYLE_PREVIEW_HEIGHT = 500
@@ -359,6 +360,7 @@ export default function AmazonPlanner() {
   const plannerProfile = getAmazonPlannerProfile(settings)
   const plannerProfileValidation = plannerProfile ? validateApiProfile(plannerProfile) : '未选择支持 Chat Completions 或 Responses API 的 AI 策划配置'
   const plannerApiLabel = plannerProfile?.apiMode === 'chat' ? 'Chat Completions' : 'Responses API'
+  const plannerUsesOfficialDeepSeek = plannerProfile ? isOfficialDeepSeekPlannerProfile(plannerProfile) : false
   const listingTargetSize = resolution === '4k' ? '4096x4096' : '2048x2048'
   const targetSize = plannerMode === 'aplus' && selectedAPlusPlan ? selectedAPlusPlan.generationSize : listingTargetSize
   const generationParamLabel = `${DEFAULT_PARAMS.output_format.toUpperCase()} / ${DEFAULT_PARAMS.quality} / 压缩率${DEFAULT_PARAMS.output_compression}`
@@ -1320,6 +1322,11 @@ export default function AmazonPlanner() {
             <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs leading-relaxed text-blue-800 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-200">
               AI策划使用设置中的策划配置，生图配置保持不变。
             </div>
+            {plannerUsesOfficialDeepSeek && (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-100">
+                {DEEPSEEK_PLANNER_NOTICE}
+              </div>
+            )}
             {plannerError && (
               <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs leading-relaxed text-red-800 dark:border-red-400/20 dark:bg-red-400/10 dark:text-red-200">
                 <div className="mb-2 flex items-center justify-between gap-2">

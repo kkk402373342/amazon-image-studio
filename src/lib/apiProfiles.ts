@@ -433,6 +433,22 @@ export function isAmazonPlannerProfile(profile: Pick<ApiProfile, 'provider' | 'a
   return profile.provider === 'openai' && (profile.apiMode === 'responses' || profile.apiMode === 'chat')
 }
 
+export function isOfficialDeepSeekPlannerProfile(profile: Pick<ApiProfile, 'provider' | 'baseUrl' | 'apiMode'>): boolean {
+  if (profile.provider !== 'openai' || (profile.apiMode !== 'responses' && profile.apiMode !== 'chat')) return false
+  const rawBaseUrl = profile.baseUrl.trim()
+  if (!rawBaseUrl) return false
+
+  const input = /^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(rawBaseUrl)
+    ? rawBaseUrl
+    : `https://${rawBaseUrl}`
+
+  try {
+    return new URL(input).hostname.toLowerCase() === 'api.deepseek.com'
+  } catch {
+    return /^(?:https?:\/\/)?api\.deepseek\.com(?:[/:]|$)/i.test(rawBaseUrl)
+  }
+}
+
 export function isOpenRouterImageGenerationProfile(profile: Pick<ApiProfile, 'provider' | 'baseUrl' | 'apiMode'>): boolean {
   if (profile.provider !== 'openai' || (profile.apiMode !== 'images' && profile.apiMode !== 'chat')) return false
   const rawBaseUrl = profile.baseUrl.trim()

@@ -1,5 +1,5 @@
 import type { ApiProfile } from '../types'
-import { DEFAULT_CHAT_MODEL, DEFAULT_RESPONSES_MODEL } from './apiProfiles'
+import { DEFAULT_CHAT_MODEL, DEFAULT_RESPONSES_MODEL, isOfficialDeepSeekPlannerProfile } from './apiProfiles'
 import { formatAmazonAPlusReferenceMaterial, formatAmazonListingReferenceMaterial } from './amazonKnowledge'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { getApiErrorMessage } from './imageApiShared'
@@ -33,6 +33,8 @@ interface PlannerApiPayload {
   imagePlans?: Array<Partial<AmazonImagePlan>>
   aPlusPlans?: Array<Partial<AmazonAPlusPlan>>
 }
+
+const DEEPSEEK_TEXT_ONLY_PLANNER_GUARD = 'Because DeepSeek cannot receive or understand reference images in this request, do not infer or describe product facts that are not explicitly present in the listing text or user-provided product facts. Do not invent colors, shapes, structures, accessories, logos, bundle quantity, package contents, materials, printed text, ports, buttons, or product variants. If a visual detail is unknown, keep the prompt neutral and refer to the exact product described by the provided facts.'
 
 export interface PlannerApiResult {
   mode: AmazonPlannerMode
@@ -500,32 +502,74 @@ function buildAPlusPlannerInstructions(baseDraft: AmazonPromptDraft, aPlusType: 
   ].filter(Boolean).join('\n')
 }
 
-function buildPlannerInstructions(baseDraft: AmazonPromptDraft, mode: AmazonPlannerMode, aPlusType: APlusContentType) {
-  return mode === 'aplus'
+function buildPlannerInstructions(
+  baseDraft: AmazonPromptDraft,
+  mode: AmazonPlannerMode,
+  aPlusType: APlusContentType,
+  options: { textOnlyReferenceGuard?: boolean } = {},
+) {
+  return [
+    mode === 'aplus'
     ? buildAPlusPlannerInstructions(baseDraft, aPlusType)
-    : buildListingPlannerInstructions(baseDraft)
+    : buildListingPlannerInstructions(baseDraft),
+    options.textOnlyReferenceGuard ? DEEPSEEK_TEXT_ONLY_PLANNER_GUARD : '',
+  ].filter(Boolean).join('\n')
 }
 
-function buildPlannerInputText(listingText: string, mode: AmazonPlannerMode, aPlusType: APlusContentType) {
+function formatDraftFact(label: string, value: string) {
+  const trimmed = value.trim()
+  return trimmed ? `- ${label}: ${trimmed}` : ''
+}
+
+function buildUserProductFactsText(baseDraft: AmazonPromptDraft) {
+  const facts = [
+    formatDraftFact('Product title', baseDraft.productTitle),
+    formatDraftFact('Category', baseDraft.category),
+    formatDraftFact('Brand or model', baseDraft.brand),
+    formatDraftFact('Color', baseDraft.color),
+    formatDraftFact('Material / finish', baseDraft.material),
+    formatDraftFact('Target customer', baseDraft.audience),
+    formatDraftFact('Package includes', baseDraft.packageIncludes),
+    formatDraftFact('Key selling points', baseDraft.sellingPoints),
+    formatDraftFact('Do not show / avoid', baseDraft.forbidden),
+  ].filter(Boolean)
+
+  return facts.length
+    ? ['User-provided product facts. Treat these as authoritative and do not contradict them:', ...facts].join('\n')
+    : ''
+}
+
+function buildPlannerInputText(
+  listingText: string,
+  mode: AmazonPlannerMode,
+  aPlusType: APlusContentType,
+  options: { includeReferenceImageInstruction?: boolean; userProductFacts?: string } = {},
+) {
+  const referenceImageInstruction = options.includeReferenceImageInstruction
+    ? 'If reference images are attached, use them to understand the actual product appearance and included items.'
+    : ''
+  const userProductFacts = options.userProductFacts?.trim()
   if (mode === 'aplus') {
     const specs = getAPlusModuleSpecs(aPlusType)
     return [
       `Parse this Amazon listing copy and produce the ${getAPlusContentTypeLabel(aPlusType)} A+ Content module plan.`,
       'Use the title and bullet points from the pasted text. If a field is uncertain, infer conservatively from the listing.',
       `Use these A+ modules exactly: ${specs.map((spec) => spec.slot).join(', ')}.`,
-      'If reference images are attached, use them to understand the actual product appearance and included items.',
+      referenceImageInstruction,
+      userProductFacts,
       '',
       listingText,
-    ].join('\n')
+    ].filter((item) => item !== '').join('\n')
   }
 
   return [
     'Parse this Amazon listing copy and produce the 7-image visual plan.',
     'Use the title and bullet points from the pasted text. If a field is uncertain, infer conservatively from the listing.',
-    'If reference images are attached, use them to understand the actual product appearance and included items.',
+    referenceImageInstruction,
+    userProductFacts,
     '',
     listingText,
-  ].join('\n')
+  ].filter((item) => item !== '').join('\n')
 }
 
 function buildChatPlannerUserContent(text: string, referenceImageDataUrls: string[]) {
@@ -557,21 +601,6 @@ function buildResponsesPlannerInput(text: string, referenceImageDataUrls: string
   ]
 }
 
-function isDeepSeekApiBaseUrl(baseUrl: string): boolean {
-  const rawBaseUrl = baseUrl.trim()
-  if (!rawBaseUrl) return false
-
-  const input = /^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(rawBaseUrl)
-    ? rawBaseUrl
-    : `https://${rawBaseUrl}`
-
-  try {
-    return new URL(input).hostname.toLowerCase() === 'api.deepseek.com'
-  } catch {
-    return /^(?:https?:\/\/)?api\.deepseek\.com(?:[/:]|$)/i.test(rawBaseUrl)
-  }
-}
-
 function buildChatPlannerSchemaGuide(mode: AmazonPlannerMode, aPlusType: APlusContentType) {
   const productFields = 'product { title, category, color, material, audience, packageIncludes }'
   const styleFields = 'seriesStyleGuide string'
@@ -595,9 +624,10 @@ function buildChatPlannerSystemPrompt(
   baseDraft: AmazonPromptDraft,
   mode: AmazonPlannerMode,
   aPlusType: APlusContentType,
+  options: { textOnlyReferenceGuard?: boolean } = {},
 ) {
   return [
-    buildPlannerInstructions(baseDraft, mode, aPlusType),
+    buildPlannerInstructions(baseDraft, mode, aPlusType, options),
     'Return a valid JSON object only. Do not output Markdown fences, comments, or any text outside the JSON object.',
     buildChatPlannerSchemaGuide(mode, aPlusType),
   ].join('\n\n')
@@ -622,8 +652,12 @@ export async function callAmazonPlannerApi(options: {
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(options.profile.apiProxy, proxyConfig)
   const useChatCompletions = options.profile.apiMode === 'chat'
-  const inputText = buildPlannerInputText(options.listingText, mode, aPlusType)
-  const referenceImageDataUrls = isDeepSeekApiBaseUrl(options.profile.baseUrl)
+  const isDeepSeekPlannerProfile = isOfficialDeepSeekPlannerProfile(options.profile)
+  const inputText = buildPlannerInputText(options.listingText, mode, aPlusType, {
+    includeReferenceImageInstruction: !isDeepSeekPlannerProfile,
+    userProductFacts: isDeepSeekPlannerProfile ? buildUserProductFactsText(options.baseDraft) : '',
+  })
+  const referenceImageDataUrls = isDeepSeekPlannerProfile
     ? []
     : options.referenceImageDataUrls ?? []
   const response = await fetch(
@@ -644,7 +678,9 @@ export async function callAmazonPlannerApi(options: {
           messages: [
             {
               role: 'system',
-              content: buildChatPlannerSystemPrompt(options.baseDraft, mode, aPlusType),
+              content: buildChatPlannerSystemPrompt(options.baseDraft, mode, aPlusType, {
+                textOnlyReferenceGuard: isDeepSeekPlannerProfile,
+              }),
             },
             {
               role: 'user',
@@ -656,7 +692,9 @@ export async function callAmazonPlannerApi(options: {
         }
       : {
           model,
-          instructions: buildPlannerInstructions(options.baseDraft, mode, aPlusType),
+          instructions: buildPlannerInstructions(options.baseDraft, mode, aPlusType, {
+            textOnlyReferenceGuard: isDeepSeekPlannerProfile,
+          }),
           input: buildResponsesPlannerInput(inputText, referenceImageDataUrls),
           text: {
             format: {

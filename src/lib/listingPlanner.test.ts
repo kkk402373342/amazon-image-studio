@@ -237,6 +237,7 @@ describe('callAmazonPlannerApi', () => {
     expect(body.instructions).not.toContain('visual style reference board generation')
     expect(body.instructions).toContain('fully plan the finished Amazon image')
     expect(body.instructions).toContain('complete information design')
+    expect(body.instructions).not.toContain('Because DeepSeek cannot receive or understand reference images')
     expect(body.instructions).not.toContain('sparse copy')
     expect(body.instructions).not.toContain('leave enough whitespace')
     expect(body.instructions).not.toContain('Embedded Amazon Listing knowledge rules')
@@ -295,6 +296,7 @@ describe('callAmazonPlannerApi', () => {
     const body = JSON.parse(String(init?.body))
     expect(body.messages[0].content).toContain('Return a valid JSON object only')
     expect(body.messages[0].content).not.toContain('styleCandidates')
+    expect(body.messages[0].content).not.toContain('Because DeepSeek cannot receive or understand reference images')
     expect(body.messages[0].content).toContain('Amazon Listing reference material for the planner')
     expect(body.messages[0].content).toContain('built-in preset style reference boards')
     expect(body.messages[1].content[0]).toMatchObject({ type: 'text' })
@@ -328,7 +330,11 @@ describe('callAmazonPlannerApi', () => {
 
     const result = await callAmazonPlannerApi({
       listingText: SAMPLE_LISTING,
-      baseDraft: DEFAULT_AMAZON_PROMPT_DRAFT,
+      baseDraft: {
+        ...DEFAULT_AMAZON_PROMPT_DRAFT,
+        color: 'matte black',
+        packageIncludes: '1 tumbler, 1 straw',
+      },
       referenceImageDataUrls: ['data:image/png;base64,ref-chat'],
       profile: createDefaultOpenAIProfile({
         baseUrl: 'https://api.deepseek.com',
@@ -341,11 +347,59 @@ describe('callAmazonPlannerApi', () => {
     const [url, init] = fetchMock.mock.calls[0]!
     expect(url).toBe('https://api.deepseek.com/chat/completions')
     const body = JSON.parse(String(init?.body))
+    expect(body.messages[0].content).toContain('Because DeepSeek cannot receive or understand reference images')
+    expect(body.messages[0].content).toContain('Do not invent colors, shapes, structures, accessories, logos, bundle quantity')
     expect(typeof body.messages[1].content).toBe('string')
     expect(body.messages[1].content).toContain('Parse this Amazon listing copy')
+    expect(body.messages[1].content).toContain('User-provided product facts')
+    expect(body.messages[1].content).toContain('- Color: matte black')
+    expect(body.messages[1].content).toContain('- Package includes: 1 tumbler, 1 straw')
+    expect(body.messages[1].content).not.toContain('If reference images are attached')
     expect(JSON.stringify(body.messages)).not.toContain('image_url')
     expect(body.response_format).toEqual({ type: 'json_object' })
     expect(result.parsed.title).toBe('DeepSeek planned tumbler')
+    expect(result.plans).toHaveLength(7)
+  })
+
+  it('omits reference images for DeepSeek Responses API planning', async () => {
+    const apiPayload = createApiPayload('DeepSeek responses planned tumbler')
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () => new Response(JSON.stringify({
+      output_text: JSON.stringify(apiPayload),
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await callAmazonPlannerApi({
+      listingText: SAMPLE_LISTING,
+      baseDraft: {
+        ...DEFAULT_AMAZON_PROMPT_DRAFT,
+        brand: 'ExampleBrand',
+        material: '18/8 stainless steel',
+      },
+      referenceImageDataUrls: ['data:image/png;base64,ref-responses'],
+      profile: createDefaultOpenAIProfile({
+        baseUrl: 'https://api.deepseek.com',
+        apiKey: 'deepseek-key',
+        apiMode: 'responses',
+        model: 'deepseek-v4-pro',
+      }),
+    })
+
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(url).toBe('https://api.deepseek.com/v1/responses')
+    const body = JSON.parse(String(init?.body))
+    expect(body.instructions).toContain('Because DeepSeek cannot receive or understand reference images')
+    expect(body.instructions).toContain('Do not invent colors, shapes, structures, accessories, logos, bundle quantity')
+    expect(body.input[0].content).toHaveLength(1)
+    expect(body.input[0].content[0].type).toBe('input_text')
+    expect(body.input[0].content[0].text).toContain('User-provided product facts')
+    expect(body.input[0].content[0].text).toContain('- Brand or model: ExampleBrand')
+    expect(body.input[0].content[0].text).toContain('- Material / finish: 18/8 stainless steel')
+    expect(body.input[0].content[0].text).not.toContain('If reference images are attached')
+    expect(JSON.stringify(body.input)).not.toContain('input_image')
+    expect(result.parsed.title).toBe('DeepSeek responses planned tumbler')
     expect(result.plans).toHaveLength(7)
   })
 

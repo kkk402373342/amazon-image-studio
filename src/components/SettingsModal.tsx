@@ -17,6 +17,7 @@ import {
   getActiveApiProfile,
   importCustomProviderSettingsFromJson,
   isAmazonPlannerProfile,
+  isOfficialDeepSeekPlannerProfile,
   isOpenRouterImageGenerationProfile,
   isOpenAICompatibleProvider,
   mergeImportedSettings,
@@ -42,6 +43,7 @@ function newId(prefix: string) {
 const ADD_CUSTOM_PROVIDER_VALUE = '__add_custom_provider__'
 const COPY_IMPORT_URL_OPTIONS_STORAGE_KEY = 'gpt-image-playground.copy-import-url-options'
 const LEGACY_DEFAULT_CHAT_MODEL = 'deepseek-v4-flash'
+const DEEPSEEK_PLANNER_NOTICE = '当前 AI 策划配置为 DeepSeek 官方接口。DeepSeek 策划阶段不会读取参考图，系统会仅用 Listing 文本和你填写的商品信息生成策划；参考图仍会在正式生图时随生图请求发送。请把产品颜色、形状、结构、配件、Logo、套装数量等关键特征写进 Listing 或商品信息中。'
 
 const DEFAULT_COPY_IMPORT_URL_OPTIONS = {
   includeApiKey: false,
@@ -385,6 +387,10 @@ export default function SettingsModal() {
   const getApiModeLabel = (apiMode: AppSettings['apiMode']) =>
     apiMode === 'responses' ? 'Responses API' : apiMode === 'chat' ? 'Chat Completions' : 'Images API'
   const amazonPlannerProfiles = draft.profiles.filter(isAmazonPlannerProfile)
+  const selectedAmazonPlannerProfile = amazonPlannerProfiles.find((profile) => profile.id === draft.amazonPlannerProfileId) ?? null
+  const selectedPlannerUsesOfficialDeepSeek = selectedAmazonPlannerProfile
+    ? isOfficialDeepSeekPlannerProfile(selectedAmazonPlannerProfile)
+    : false
   const amazonPlannerProfileOptions = amazonPlannerProfiles.length
     ? amazonPlannerProfiles.map((profile) => ({
         label: `${profile.name} · ${profile.model || getDefaultModelForMode(profile.apiMode)} · ${getApiModeLabel(profile.apiMode)}`,
@@ -1451,6 +1457,11 @@ export default function SettingsModal() {
                 <div data-selectable-text className="mt-2 text-xs leading-relaxed text-blue-800 dark:text-blue-200">
                   只用于首页 Amazon 面板的 AI 策划；普通生图只接受当前配置为 Images API。默认分为「生图」和「AI策划」两套配置：生图使用 Images API + gpt-image-2，AI 策划使用 Responses API + gpt-5.5。
                 </div>
+                {selectedPlannerUsesOfficialDeepSeek && (
+                  <div data-selectable-text className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-100">
+                    {DEEPSEEK_PLANNER_NOTICE}
+                  </div>
+                )}
               </div>
 
               {/* 1. 配置名称 */}
