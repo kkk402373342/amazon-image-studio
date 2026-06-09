@@ -341,12 +341,19 @@ export default function AmazonPlanner() {
   const effectiveReferenceCount = inputImages.length + (usesStyleReferenceForActivePlan && selectedStyleImage?.imageId && !inputImages.some((image) => image.id === selectedStyleImage.imageId) ? 1 : 0)
   const styleReferenceLimitExceeded = usesStyleReferenceForActivePlan && effectiveReferenceCount > API_MAX_IMAGES
   const activePrompt = plannerMode === 'aplus'
-    ? selectedAPlusPlan ? buildAmazonAPlusPlanPrompt({ ...selectedAPlusPlan, seriesStyleGuide: activeSeriesStyleGuide, styleReferenceAttached: usesStyleReferenceForActivePlan, styleDensityMode }) : ''
+    ? selectedAPlusPlan ? buildAmazonAPlusPlanPrompt({
+      ...selectedAPlusPlan,
+      seriesStyleGuide: activeSeriesStyleGuide,
+      styleReferenceAttached: usesStyleReferenceForActivePlan,
+      styleDensityMode,
+      selectedStylePreset: usesStyleReferenceForActivePlan ? selectedStylePreset : null,
+    }) : ''
     : selectedPlan ? buildAmazonPlanPrompt({
       ...selectedPlan,
       seriesStyleGuide: isMainListingPlan ? null : activeSeriesStyleGuide,
       styleReferenceAttached: usesStyleReferenceForActivePlan,
       styleDensityMode,
+      selectedStylePreset: usesStyleReferenceForActivePlan ? selectedStylePreset : null,
     }) : ''
   const activePlanMarkdown = plannerMode === 'aplus' ? selectedAPlusPlan?.planMarkdown ?? '' : selectedPlan?.planMarkdown ?? ''
   const activePlanPreview = activePlanMarkdown

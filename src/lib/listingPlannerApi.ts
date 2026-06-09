@@ -35,6 +35,13 @@ interface PlannerApiPayload {
 }
 
 const DEEPSEEK_TEXT_ONLY_PLANNER_GUARD = 'Because DeepSeek cannot receive or understand reference images in this request, do not infer or describe product facts that are not explicitly present in the listing text or user-provided product facts. Do not invent colors, shapes, structures, accessories, logos, bundle quantity, package contents, materials, printed text, ports, buttons, or product variants. If a visual detail is unknown, keep the prompt neutral and refer to the exact product described by the provided facts.'
+const PRODUCT_REFERENCE_FACTS_ONLY_PLANNER_GUIDE = [
+  'Product reference image rule:',
+  '- Use product reference images only to identify product facts: real appearance, color, shape, structure, included accessories, materials, package contents, and feature evidence.',
+  '- Do not use product reference images to choose the final visual style, color palette, background mood, typography style, decorative accents, or overall aesthetic unless the listing text explicitly requests it.',
+  '- imagePlans[].prompt and aPlusPlans[].prompt must avoid fixed non-product aesthetics such as coastal resort, warm cream background, botanical accents, luxury editorial, cyberpunk, or magazine fashion unless those are explicit product, brand, or listing requirements.',
+  '- seriesStyleGuide should preserve cross-image product consistency, factual visual continuity, copy hierarchy, and product appearance only; it must not lock the final palette, typography, background, lighting mood, or decorative system because the user-selected preset style controls those during image generation.',
+].join('\n')
 
 export interface PlannerApiResult {
   mode: AmazonPlannerMode
@@ -455,10 +462,11 @@ function buildListingPlannerInstructions(baseDraft: AmazonPromptDraft) {
     'The application only fixes the slot count and order. You must decide the strategy, composition, copy approach, visual treatment, prompt content, and negative prompt content.',
     'Use the Amazon reference material below to improve compliance judgment. It is not a fixed slot-by-slot framework, and it must not replace the product facts from the listing and reference images.',
     formatAmazonListingReferenceMaterial(),
+    PRODUCT_REFERENCE_FACTS_ONLY_PLANNER_GUIDE,
     'For each slot, write planMarkdown in Simplified Chinese as a detailed agent-style plan similar to a ChatGPT web response, then write a professional English image prompt and English negative prompt.',
     'Each image prompt should fully plan the finished Amazon image: composition, product evidence, on-image US-English copy when useful, callouts or information areas when useful, visual hierarchy, and rendering style.',
     'For secondary information images, prefer complete information design with clear hierarchy and useful product evidence; lifestyle or beauty slots should still have purposeful composition and visible product support.',
-    'Return one seriesStyleGuide string in English that can keep separately generated images visually coherent together with the user-selected preset style reference image.',
+    'Return one seriesStyleGuide string in English for cross-image product consistency and factual visual continuity. Keep it style-neutral and do not use it to choose the final color palette, typography, background mood, lighting mood, or decorative style.',
     'Do not create, request, or describe separate style reference board images. The application uses built-in preset style reference boards.',
     'Field language rules: label and planMarkdown must be Simplified Chinese; seriesStyleGuide, prompt, and negativePrompt must be English.',
     'Do not generate images. Only return JSON matching the schema.',
@@ -487,6 +495,7 @@ function buildAPlusPlannerInstructions(baseDraft: AmazonPromptDraft, aPlusType: 
     'The application only fixes the module order, module type, upload size, and generation size. You must decide the strategy, composition, copy approach, visual treatment, prompt content, and negative prompt content.',
     'Use the Amazon A+ reference material below to improve compliance judgment. It is not a fixed module creative framework, and it must not replace the product facts from the listing and reference images.',
     formatAmazonAPlusReferenceMaterial(),
+    PRODUCT_REFERENCE_FACTS_ONLY_PLANNER_GUIDE,
     'For each module, write planMarkdown in Simplified Chinese as a detailed agent-style plan similar to a ChatGPT web response, then write a professional English image prompt and English negative prompt.',
     'Each module prompt should fully plan the finished Amazon image: composition, product evidence, on-image US-English copy when useful, callouts or information areas when useful, visual hierarchy, and rendering style.',
     'For A+ information modules, prefer complete information design with clear hierarchy and useful product evidence; lifestyle or brand modules should still have purposeful composition and visible product support.',
@@ -494,7 +503,7 @@ function buildAPlusPlannerInstructions(baseDraft: AmazonPromptDraft, aPlusType: 
       ? `Known brand/model: ${baseDraft.brand}. For header-banner and hero-banner modules, naturally include this real brand/model as a small brand line, headline prefix, or subline when it improves the composition. For brand-story modules, use this brand/model to frame the brand tone or promise only when supported by the provided listing or brand notes.`
       : 'If no real brand/model is provided, do not invent a brand name, logo, trademark, brand history, brand promise, authorization claim, website, contact detail, or external link.',
     'Use brand names as text only unless the user provides a real logo reference image. Do not invent logo artwork, standalone trademark/copyright symbols, brand history, authorization claims, websites, contact details, or external links.',
-    'Return one seriesStyleGuide string in English that can keep separately generated modules visually coherent together with the user-selected preset style reference image.',
+    'Return one seriesStyleGuide string in English for cross-module product consistency and factual visual continuity. Keep it style-neutral and do not use it to choose the final color palette, typography, background mood, lighting mood, or decorative style.',
     'Do not create, request, or describe separate style reference board images. The application uses built-in preset style reference boards.',
     'For modules that need external A+ text outside the image, write textTitle and textBody in natural US English. Otherwise return empty strings.',
     'Field language rules: label and planMarkdown must be Simplified Chinese; textTitle/textBody must be English or empty; seriesStyleGuide, prompt, and negativePrompt must be English.',

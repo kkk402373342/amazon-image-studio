@@ -54,6 +54,31 @@ describe('Amazon prompt builders', () => {
     expect(prompt).not.toContain('A+ module requirements:')
   })
 
+  it('prioritizes the selected style preset over conflicting series style language', () => {
+    const prompt = buildAmazonPlanPrompt({
+      prompt: 'Create an Amazon secondary infographic image of the exact product.',
+      negativePrompt: 'price, reviews',
+      seriesStyleGuide: 'Use warm cream backgrounds, botanical accents, and coastal resort styling.',
+      styleReferenceAttached: true,
+      styleDensityMode: 'rich',
+      selectedStylePreset: {
+        label: '清爽科技',
+        description: '冷色光感、干净层级、精准标注，适合电子、工具、办公类产品。',
+        palette: ['#F8FAFC', '#38BDF8', '#14B8A6'],
+      },
+    })
+
+    expect(prompt).toContain('Selected visual style (highest priority):')
+    expect(prompt).toContain('Style preset: 清爽科技.')
+    expect(prompt).toContain('冷色光感、干净层级、精准标注')
+    expect(prompt).toContain('Palette anchors: #F8FAFC, #38BDF8, #14B8A6.')
+    expect(prompt).toContain('highest-priority visual system')
+    expect(prompt).toContain('override that conflict with this selected visual style')
+    expect(prompt).toContain('Series style guide (lower priority than the selected visual style):')
+    expect(prompt).toContain('Use warm cream backgrounds')
+    expect(prompt).toContain('The selected visual style text block is higher priority')
+  })
+
   it('builds minimal density guidance when requested', () => {
     const prompt = buildAmazonPlanPrompt({
       prompt: 'Create an Amazon secondary image.',
@@ -83,6 +108,7 @@ describe('Amazon prompt builders', () => {
     expect(prompt).not.toContain('Series style guide:')
     expect(prompt).not.toContain('Layout density:')
     expect(prompt).not.toContain('The last input image is a hidden style reference')
+    expect(prompt).not.toContain('Selected visual style')
   })
 
   it('identifies the Amazon listing MAIN slot regardless of casing or spacing', () => {
@@ -105,6 +131,24 @@ describe('Amazon prompt builders', () => {
     expect(prompt).toContain('pricing, reviews, clutter')
     expect(prompt).not.toContain('Layout density:')
     expect(prompt).not.toContain('The last input image is a hidden style reference')
+  })
+
+  it('applies selected style preset priority to A+ prompts', () => {
+    const prompt = buildAmazonAPlusPlanPrompt({
+      prompt: 'A+ module with feature callouts.',
+      negativePrompt: 'pricing, reviews',
+      seriesStyleGuide: 'Use warm tan backgrounds.',
+      styleReferenceAttached: true,
+      selectedStylePreset: {
+        label: '明亮零售',
+        description: '明快色块、清晰卖点区域、购物页友好，适合快消、厨房、运动配件。',
+        palette: ['#FFFFFF', '#F97316', '#2563EB'],
+      },
+    })
+
+    expect(prompt).toContain('Style preset: 明亮零售.')
+    expect(prompt).toContain('Palette anchors: #FFFFFF, #F97316, #2563EB.')
+    expect(prompt).toContain('Series style guide (lower priority than the selected visual style):')
   })
 
 })
@@ -229,6 +273,9 @@ describe('callAmazonPlannerApi', () => {
     const body = JSON.parse(String(init?.body))
     expect(body.instructions).toContain('The application only fixes the slot count and order')
     expect(body.instructions).toContain('Amazon Listing reference material for the planner')
+    expect(body.instructions).toContain('Use product reference images only to identify product facts')
+    expect(body.instructions).toContain('must avoid fixed non-product aesthetics')
+    expect(body.instructions).toContain('must not lock the final palette')
     expect(body.instructions).toContain('pure white background RGB 255,255,255')
     expect(body.instructions).toContain('product fills about 85%')
     expect(body.instructions).toContain('no text, logo, watermark')
@@ -298,6 +345,8 @@ describe('callAmazonPlannerApi', () => {
     expect(body.messages[0].content).not.toContain('styleCandidates')
     expect(body.messages[0].content).not.toContain('Because DeepSeek cannot receive or understand reference images')
     expect(body.messages[0].content).toContain('Amazon Listing reference material for the planner')
+    expect(body.messages[0].content).toContain('Use product reference images only to identify product facts')
+    expect(body.messages[0].content).toContain('must avoid fixed non-product aesthetics')
     expect(body.messages[0].content).toContain('built-in preset style reference boards')
     expect(body.messages[1].content[0]).toMatchObject({ type: 'text' })
     expect(body.messages[1].content[1]).toEqual({
@@ -436,6 +485,8 @@ describe('callAmazonPlannerApi', () => {
     expect(body.text.format.schema.required).not.toContain('visualSystem')
     expect(body.instructions).toContain('The application only fixes the module order, module type, upload size, and generation size')
     expect(body.instructions).toContain('Amazon A+ reference material for the planner')
+    expect(body.instructions).toContain('Use product reference images only to identify product facts')
+    expect(body.instructions).toContain('must avoid fixed non-product aesthetics')
     expect(body.instructions).toContain('Header Banner 970x300')
     expect(body.instructions).toContain('Single Image 970x600')
     expect(body.instructions).toContain('Highlight Tile 220x220')

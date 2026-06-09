@@ -171,6 +171,7 @@ const STYLE_REFERENCE_GUARD = [
   'Style reference rule:',
   '- The last input image is a hidden style reference selected by the user.',
   '- Use it only for color palette, lighting, contrast, material finish, typography feel, and overall visual polish.',
+  '- The selected visual style text block is higher priority than any conflicting aesthetic language in the image task or series style guide.',
   '- Do not copy any placeholder words, fixed layout, color swatch positions, exact composition, product arrangement, product count, props, scene, or information density from the style reference board.',
   '- Follow the image task, layout density, and negative prompt sections for the actual content and arrangement.',
 ].join('\n')
@@ -208,11 +209,31 @@ function formatPromptBlock(options: {
   seriesStyleGuide?: string | null
   styleReferenceAttached?: boolean
   styleDensityMode?: AmazonStyleDensityMode
+  selectedStylePreset?: {
+    label: string
+    description: string
+    palette: string[]
+  } | null
 }) {
+  const selectedStylePreset = options.styleReferenceAttached ? options.selectedStylePreset : null
+  const selectedStyleBlock = selectedStylePreset
+    ? [
+      'Selected visual style (highest priority):',
+      `- Style preset: ${selectedStylePreset.label}.`,
+      `- Style direction: ${selectedStylePreset.description}`,
+      selectedStylePreset.palette.length ? `- Palette anchors: ${selectedStylePreset.palette.join(', ')}.` : '',
+      '- This selected visual style is the highest-priority visual system for background, palette, typography, lighting, decorative accents, material finish, and information-panel styling.',
+      '- If the image task prompt or Series style guide contains a conflicting aesthetic, background mood, color palette, typography direction, or decorative accent, override that conflict with this selected visual style while preserving product facts and required copy.',
+    ].filter(Boolean).join('\n')
+    : ''
+  const seriesStyleGuideLabel = selectedStyleBlock
+    ? 'Series style guide (lower priority than the selected visual style):'
+    : 'Series style guide:'
   const sections = [
     options.prompt.trim(),
+    selectedStyleBlock,
     options.seriesStyleGuide?.trim()
-      ? `Series style guide:\n${options.seriesStyleGuide.trim()}`
+      ? `${seriesStyleGuideLabel}\n${options.seriesStyleGuide.trim()}`
       : '',
     options.styleReferenceAttached ? STYLE_DENSITY_GUIDES[options.styleDensityMode ?? 'rich'] : '',
     options.negativePrompt?.trim()
@@ -228,6 +249,11 @@ export function buildAmazonPlanPrompt(plan: Pick<AmazonImagePlan, 'prompt' | 'ne
   seriesStyleGuide?: string | null
   styleReferenceAttached?: boolean
   styleDensityMode?: AmazonStyleDensityMode
+  selectedStylePreset?: {
+    label: string
+    description: string
+    palette: string[]
+  } | null
 }): string {
   return formatPromptBlock(plan)
 }
@@ -340,6 +366,11 @@ export function buildAmazonAPlusPlanPrompt(plan: Pick<AmazonAPlusPlan, 'prompt' 
   seriesStyleGuide?: string | null
   styleReferenceAttached?: boolean
   styleDensityMode?: AmazonStyleDensityMode
+  selectedStylePreset?: {
+    label: string
+    description: string
+    palette: string[]
+  } | null
 }): string {
   return formatPromptBlock(plan)
 }
